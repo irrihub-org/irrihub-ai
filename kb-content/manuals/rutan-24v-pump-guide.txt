@@ -1,0 +1,49 @@
+RUTAN 24V 250W SOLAR PUMP — QUICK REFERENCE GUIDE
+
+MODEL: Rutan 24V DC Submersible Solar Pump
+POWER: 250W
+VOLTAGE: 24V DC
+MAX FLOW: 3,000 litres/hour
+MAX HEAD: 40 metres
+SUITABLE FOR: Farms up to 5 acres with drip or sprinkler irrigation
+
+INSTALLATION
+1. Mount solar panels on a south-facing frame at 15-degree tilt angle
+2. Connect panels in series to achieve 24V output (2x 12V panels or 1x 24V panel)
+3. Connect panel output to the pump controller input terminals
+4. Connect controller output to pump motor terminals
+5. Lower pump into water source — minimum 30cm water above pump inlet
+6. Prime the system by running for 5 minutes with outlet valve open
+7. Connect main irrigation line to pump outlet
+
+TROUBLESHOOTING
+Problem: Pump does not start
+- Check solar panel voltage with multimeter — should read 24V+ in direct sunlight
+- Check all cable connections are tight and not corroded
+- Check controller LED — green = normal, red = fault, no light = no power
+- Check fuse on controller board
+
+Problem: Pump runs but low flow
+- Check for blockages in the suction strainer
+- Check water level — pump must be submerged
+- Check for air leaks in delivery pipe
+- Clean or replace the impeller if worn
+
+Problem: Pump starts and stops repeatedly
+- Insufficient sunlight — panels need direct sun, not partial shade
+- Water level too low — pump cycling on dry-run protection
+- Controller overheating — ensure ventilation around controller box
+
+MAINTENANCE SCHEDULE
+Weekly: Check cable connections, clean panel surface
+Monthly: Inspect suction strainer, check system pressure
+Quarterly: Flush all irrigation lines, inspect emitter performance
+Annually: Full system inspection, replace worn seals, check impeller
+
+WARRANTY
+1 year manufacturer warranty on pump motor
+2 year warranty on controller electronics
+Solar panels: 25 year performance warranty
+
+CONTACT
+IrriHub Support: Available via WhatsApp or chat.irrihub.com
