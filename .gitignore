@@ -1,0 +1,11 @@
+.env
+*.pyc
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+*.log
+postgres/
+chatwoot/
+n8n/

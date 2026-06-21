@@ -1,0 +1,18 @@
+services:
+  irrihub-kb-portal:
+    build: .
+    container_name: irrihub-kb-portal
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8001:8001"
+    networks:
+      - irrihub-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  irrihub-net:
+    external: true

@@ -1,0 +1,23 @@
+services:
+  irrihub-fastapi:
+    build: .
+    container_name: irrihub-fastapi
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - irrihub-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+networks:
+  irrihub-net:
+    external: true
