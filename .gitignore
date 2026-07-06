@@ -9,3 +9,5 @@ venv/
 postgres/
 chatwoot/
 n8n/
+fastapi/rag/
+fastapi/seed_kb.py
