@@ -66,3 +66,38 @@ async def fetch_top_k(
         )
 
     return [dict(row) for row in rows]
+
+
+async def is_conversation_human_managed(conversation_id: str) -> bool:
+    """
+    Once a conversation has been escalated, a human owns it — the bot
+    must not keep auto-replying underneath them. Checked at the start
+    of every /chat call.
+    """
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT is_human_managed FROM sessions WHERE conversation_id = $1",
+            conversation_id,
+        )
+
+    return bool(row and row["is_human_managed"])
+
+
+async def mark_conversation_human_managed(
+    conversation_id: str, language: str
+) -> None:
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO sessions (conversation_id, is_human_managed, language)
+            VALUES ($1, true, $2)
+            ON CONFLICT (conversation_id)
+            DO UPDATE SET is_human_managed = true, last_active = now()
+            """,
+            conversation_id,
+            language,
+        )
