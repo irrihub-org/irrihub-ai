@@ -2,22 +2,37 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from langdetect import detect_langs, DetectorFactory, LangDetectException
-
-# langdetect uses a random seed internally by default, which makes
-# results non-deterministic across runs. Seed it for consistency.
-DetectorFactory.seed = 0
-
-SUPPORTED_LANGUAGES = {"en", "sw"}
 from sentence_transformers import SentenceTransformer
 
 from app.rag import retrieve_top_k
 from app.llm import generate_response
 from app.models import ChatRequest, AIResponse
+from app.intent import classify_intent
+from app.escalation import determine_route, log_kb_gap
+
+DetectorFactory.seed = 0
+SUPPORTED_LANGUAGES = {"en", "sw"}
+
+LANGUAGE_NAMES = {
+    "en": "English",
+    "sw": "Swahili",
+}
+
+HARDWARE_FAULT_DIAGNOSTIC = (
+    "Pole sana kwa tatizo hili! Ili tuweze kukusaidia haraka: "
+    "1) Je, pump inajaribu kuwasha lakini haina nguvu, au haianzishi kabisa? "
+    "2) Angalia voltage kwenye solar controller - inapaswa kuwa 24V au zaidi. "
+    "3) Angalia kama waya zote zimeunganishwa vizuri."
+)
+
+ESCALATION_MESSAGE = (
+    "I'm not fully confident I have the right information for this. "
+    "Let me connect you with our support team who can help further."
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Don't load the model during startup
     app.state.embedding_model = None
     yield
 
@@ -41,30 +56,11 @@ async def health():
 @app.get("/")
 async def root():
     return {
-        "message": "IrriHub AI — endpoint not configured yet"
+        "message": "IrriHub AI — Welcome"
     }
 
 
 def detect_language(text: str) -> str:
-    """
-    Detect the language of the user's message, constrained to the
-    languages this system actually supports (en, sw). Falls back to
-    'en' if detection fails entirely (e.g. message too short/empty).
-
-    langdetect recognises 55+ languages, but on short or ambiguous
-    text it can confidently return something completely unrelated
-    (e.g. 'it', 'tl') that this system has no business acting on.
-    Rather than trust its raw top guess, we look at ALL of its
-    candidate guesses and pick whichever of our two supported
-    languages scored highest. If neither en nor sw appears in its
-    candidates at all, we default to 'en'.
-
-    NOTE: langdetect is not trained on Sheng (Kenyan slang), so Sheng
-    messages will likely be detected as 'sw' or occasionally 'en'.
-    Sheng normalisation (build order Step 4) should run BEFORE this
-    once normalise.py exists, since normalising Sheng into standard
-    Swahili first will make detection more reliable.
-    """
     try:
         candidates = detect_langs(text)
     except LangDetectException:
@@ -78,15 +74,8 @@ def detect_language(text: str) -> str:
     return supported_candidates[0].lang
 
 
-LANGUAGE_NAMES = {
-    "en": "English",
-    "sw": "Swahili",
-}
-
-
 @app.post("/chat", response_model=AIResponse)
 async def chat(req: ChatRequest):
-    # Load the model only on the first request
     if app.state.embedding_model is None:
         print("Loading embedding model...")
         app.state.embedding_model = SentenceTransformer(
@@ -100,13 +89,58 @@ async def chat(req: ChatRequest):
     language = detect_language(query)
     language_name = LANGUAGE_NAMES.get(language, language)
 
+    intent, category_hint = classify_intent(query)
+
+    if intent == "hardware_fault":
+        return AIResponse(
+            text=HARDWARE_FAULT_DIAGNOSTIC,
+            intent=intent,
+            category="pump_troubleshooting",
+            confidence=1.0,
+            route="deterministic",
+            language=language,
+            sources=[],
+        )
+
     chunks = await retrieve_top_k(query, model)
 
-    context_text = "\n".join(
-        chunk["chunk_text"] for chunk in chunks
+    top_distance = chunks[0]["distance"] if chunks else None
+    confidence, route, needs_caveat = determine_route(top_distance)
+
+    print(
+        f"[confidence-gate] query={query!r} "
+        f"top_distance={top_distance} confidence={confidence:.4f} "
+        f"route={route} needs_caveat={needs_caveat}"
     )
 
-    
+    if route == "escalate":
+        failure_reason = "no_kb_match" if top_distance is None or top_distance > 0.6 else "low_confidence"
+        await log_kb_gap(
+            query_text=query,
+            confidence=confidence,
+            channel=req.channel,
+            failure_reason=failure_reason,
+        )
+        top_category = chunks[0]["category"] if chunks else ""
+        return AIResponse(
+            text=ESCALATION_MESSAGE,
+            intent=intent,
+            category=top_category,
+            confidence=confidence,
+            route="escalate",
+            language=language,
+            sources=[str(chunk["id"]) for chunk in chunks],
+        )
+
+  
+    PER_CHUNK_DISTANCE_CUTOFF = 1.0
+    relevant_chunks = [
+        chunk for chunk in chunks
+        if chunk["distance"] is None or chunk["distance"] <= PER_CHUNK_DISTANCE_CUTOFF
+    ] or chunks[:1]
+
+    context_text = "\n".join(chunk["chunk_text"] for chunk in relevant_chunks)
+
     history_block = ""
     if req.conversation_history:
         history_block = f"""
@@ -115,11 +149,21 @@ Conversation so far:
 """
 
     prompt = f"""
-You are an agricultural assistant.
+You are an agricultural assistant for IrriHub, a company selling irrigation
+equipment in Kenya.
 
-Use ONLY the information provided in the context below to answer the user's question.
-If the answer cannot be found in the context, say that you do not have enough information.
-Respond in {language_name} ({language}).
+STRICT RULES:
+1. Answer ONLY using facts explicitly stated in the Context below.
+2. Do NOT describe yourself, your role, your capabilities, or your
+   limitations. Never say things like "I am an assistant" or "I don't
+   have expertise in X" - these are not in the Context and must not
+   be invented.
+3. If the Context does not contain information that directly answers
+   the question, respond with EXACTLY this sentence and nothing else:
+   "I don't have that information — let me connect you with our support team."
+4. Do not guess, infer, or fill gaps with general knowledge about
+   irrigation or agriculture that isn't explicitly in the Context.
+5. Respond in {language_name} ({language}).
 
 Context:
 {context_text}
@@ -130,8 +174,22 @@ User question:
 
     answer = await generate_response(prompt)
 
+    # Medium-confidence band: respond, but add a caveat + escalation offer.
+    if needs_caveat:
+        answer += (
+            "\n\n(I found some relevant information, but I'm not fully "
+            "certain this fully answers your question — let me know if "
+            "you'd like to speak with an agronomist.)"
+        )
+
+    top_category = relevant_chunks[0]["category"] if relevant_chunks else ""
+
     return AIResponse(
         text=answer,
+        intent=intent,
+        category=top_category,
+        confidence=confidence,
+        route=route,
         language=language,
-        sources=[str(chunk["id"]) for chunk in chunks],
+        sources=[str(chunk["id"]) for chunk in relevant_chunks],
     )

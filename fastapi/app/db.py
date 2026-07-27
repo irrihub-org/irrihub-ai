@@ -18,11 +18,6 @@ def get_database_url() -> str:
 
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
-    """
-    Called by asyncpg for every new connection in the pool.
-    Registers the pgvector codec so Python lists can be sent
-    directly as `vector` query parameters.
-    """
     await register_vector(conn)
 
 
@@ -44,19 +39,26 @@ async def fetch_top_k(
     embedding: list[float],
     k: int = 5,
 ):
+    """
+    Returns top-k chunks, each including the pgvector cosine distance
+    ('distance' field, 0=identical, 2=opposite) so callers can compute
+    a confidence score. 
+    """
     pool = await get_pool()
 
     query = """
-    SELECT
-        kd.id,
-        kd.chunk_text
-    FROM kb_documents kd
-    JOIN kb_sources ks
-        ON kd.source_id = ks.id
-    WHERE ks.is_active = true
-    ORDER BY kd.embedding <=> $1
-    LIMIT $2;
-    """
+SELECT
+    kd.id,
+    kd.chunk_text,
+    COALESCE(kd.category, '') AS category,
+    kd.embedding <=> $1 AS distance
+FROM kb_documents kd
+JOIN kb_sources ks
+    ON kd.source_id = ks.id
+WHERE ks.is_active = true
+ORDER BY kd.embedding <=> $1
+LIMIT $2;
+"""
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
