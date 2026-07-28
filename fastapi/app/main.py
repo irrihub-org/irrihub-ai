@@ -68,13 +68,6 @@ LOW_CONFIDENCE_MESSAGE = (
     "Let me connect you with our support team who can help further."
 )
 
-HARDWARE_FAULT_DIAGNOSTIC = (
-    "Pole sana kwa tatizo hili! Ili tuweze kukusaidia haraka: "
-    "1) Je, pump inajaribu kuwasha lakini haina nguvu, au haianzishi kabisa? "
-    "2) Angalia voltage kwenye solar controller - inapaswa kuwa 24V au zaidi. "
-    "3) Angalia kama waya zote zimeunganishwa vizuri."
-)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -139,7 +132,7 @@ async def wants_human_by_intent(text: str) -> bool:
             models=OPENROUTER_CLASSIFIER_MODELS,
         )
     except Exception as e:
-        print(f"Intent classification failed, defaulting to CONTINUE: {e}")
+        print(f"Intent classification failed ({type(e).__name__}), defaulting to CONTINUE: {e}")
         return False
 
     return verdict.strip().upper().startswith("ESCALATE")
@@ -225,20 +218,7 @@ async def chat(req: ChatRequest):
     # within the intent, e.g. "pricing" within product_inquiry).
     intent, category = classify_intent(query)
 
-    # TODO (next branch): category is "" for general_query here.
-    # Tier 2 LLM category fallback was prototyped but deferred.
 
-    # --- Deterministic bypass for hardware faults ---
-    if intent == "hardware_fault":
-        return AIResponse(
-            text=HARDWARE_FAULT_DIAGNOSTIC,
-            intent=intent,
-            category=category or "pump_troubleshooting",
-            confidence=1.0,
-            route="deterministic",
-            language=language,
-            sources=[],
-        )
 
     chunks = await retrieve_top_k(query, model)
 

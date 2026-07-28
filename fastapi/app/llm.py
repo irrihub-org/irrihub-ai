@@ -30,6 +30,12 @@ _RETRYABLE_STATUS_CODES = {404, 429, 503}
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful agricultural assistant."
 
+# httpx's default timeout (5s total) is too short for LLM calls, which
+# can legitimately take longer. A timeout under the old default showed
+# up as an exception with an EMPTY message, which was hard to debug -
+# give it more realistic headroom.
+_REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
 
 async def generate_response(
     prompt: str,
@@ -45,7 +51,7 @@ async def generate_response(
 
     last_error = None
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
         for model in models:
             res = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
