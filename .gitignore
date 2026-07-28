@@ -12,3 +12,4 @@ n8n/
 fastapi/rag/
 fastapi/seed_kb.py
 fastapi/local-test-content/
+deploy.sh

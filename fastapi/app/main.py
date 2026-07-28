@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
+import re
 
 from fastapi import FastAPI
 from langdetect import detect_langs, DetectorFactory, LangDetectException
 from sentence_transformers import SentenceTransformer
 
 from app.rag import retrieve_top_k
-from app.llm import generate_response
+from app.llm import generate_response, OPENROUTER_CLASSIFIER_MODELS
 from app.models import ChatRequest, AIResponse
+from app.db import is_conversation_human_managed, mark_conversation_human_managed
 from app.intent import classify_intent
 from app.escalation import determine_route, log_kb_gap
 
@@ -18,16 +20,59 @@ LANGUAGE_NAMES = {
     "sw": "Swahili",
 }
 
+INTENT_CLASSIFIER_SYSTEM_PROMPT = (
+    "You classify a single user message for a customer support chatbot. "
+    "Reply with exactly one word: ESCALATE or CONTINUE.\n"
+    "ESCALATE means the user is asking to speak with a human, an agent, "
+    "an expert, customer support/care, or otherwise wants to stop talking "
+    "to the bot and be connected to a person.\n"
+    "CONTINUE means the user is asking a normal question the bot should "
+    "try to answer itself.\n"
+    "Reply with only ESCALATE or CONTINUE, nothing else."
+)
+
+# Phrases that mean the user wants a human, regardless of what the KB
+# contains. Checked before RAG/LLM so escalation never depends on the
+# model correctly interpreting the request from retrieved context.
+ESCALATION_PHRASES = {
+    "escalate to human",
+    "talk to a human",
+    "speak to a human",
+    "talk to an agent",
+    "speak to an agent",
+    "connect me to a human",
+    "connect me to an agent",
+    "human agent",
+    "real person",
+    "customer care",
+    "customer service",
+}
+
+ESCALATION_MESSAGES = {
+    "en": "I'm connecting you with one of our team members — someone will be with you shortly.",
+    "sw": "Ninakuunganisha na mmoja wa wafanyakazi wetu — mtu atakusaidia hivi karibuni.",
+}
+
+# Once a conversation is escalated, a human owns it - the bot should
+# stay quiet rather than keep answering underneath them.
+ALREADY_ESCALATED_MESSAGES = {
+    "en": "A team member is already helping with this conversation.",
+    "sw": "Mfanyakazi wetu tayari anakusaidia katika mazungumzo haya.",
+}
+
+# Distinct from the explicit human-request escalation above - this
+# fires when the user DIDN'T ask for a human, but the KB genuinely has
+# nothing relevant (confidence gate, see escalation.py).
+LOW_CONFIDENCE_MESSAGE = (
+    "I'm not fully confident I have the right information for this. "
+    "Let me connect you with our support team who can help further."
+)
+
 HARDWARE_FAULT_DIAGNOSTIC = (
     "Pole sana kwa tatizo hili! Ili tuweze kukusaidia haraka: "
     "1) Je, pump inajaribu kuwasha lakini haina nguvu, au haianzishi kabisa? "
     "2) Angalia voltage kwenye solar controller - inapaswa kuwa 24V au zaidi. "
     "3) Angalia kama waya zote zimeunganishwa vizuri."
-)
-
-ESCALATION_MESSAGE = (
-    "I'm not fully confident I have the right information for this. "
-    "Let me connect you with our support team who can help further."
 )
 
 
@@ -74,8 +119,98 @@ def detect_language(text: str) -> str:
     return supported_candidates[0].lang
 
 
+def wants_human_by_keyword(text: str) -> bool:
+    normalized = text.strip().lower()
+    return any(phrase in normalized for phrase in ESCALATION_PHRASES)
+
+
+async def wants_human_by_intent(text: str) -> bool:
+    """
+    Keyword matching only catches phrasings we thought to list. Real
+    users ask in ways we won't anticipate (e.g. "do you have an expert
+    that can assist?"), so anything the keyword check doesn't already
+    catch gets a cheap LLM classification pass before falling through
+    to the full RAG pipeline.
+    """
+    try:
+        verdict = await generate_response(
+            text,
+            system_prompt=INTENT_CLASSIFIER_SYSTEM_PROMPT,
+            models=OPENROUTER_CLASSIFIER_MODELS,
+        )
+    except Exception as e:
+        print(f"Intent classification failed, defaulting to CONTINUE: {e}")
+        return False
+
+    return verdict.strip().upper().startswith("ESCALATE")
+
+
+def _extract_chunk_label(chunk_text: str) -> str:
+    """
+    Derive a short, human-readable label describing what a chunk is
+    about, from its own content. Three patterns, checked in order:
+    1. FAQ-style chunks ("Q: ...\\nA: ...") -> use the question itself.
+    2. ALL-CAPS section headers (e.g. "TROUBLESHOOTING") -> use that.
+    3. Fallback -> a short truncated snippet of the first line.
+    """
+    first_line = chunk_text.strip().split("\n", 1)[0].strip()
+
+    if first_line.startswith("Q:"):
+        question = first_line[2:].strip()
+        return question if len(question) <= 80 else question[:77] + "..."
+
+    if re.fullmatch(r"[A-Z][A-Z\s]{2,}", first_line):
+        return first_line.title()
+
+    return first_line if len(first_line) <= 60 else first_line[:57] + "..."
+
+
+def _build_source_labels(chunks: list[dict]) -> list[str]:
+    """
+    Returns a deduplicated, order-preserving list of "filename —
+    label" strings, so the response's sources field is more specific
+    than a bare filename or a raw chunk UUID.
+    """
+    seen = set()
+    labels = []
+    for chunk in chunks:
+        filename = chunk.get("source_filename")
+        if not filename:
+            continue
+        label = _extract_chunk_label(chunk.get("chunk_text", ""))
+        entry = f"{filename} — {label}" if label else filename
+        if entry not in seen:
+            seen.add(entry)
+            labels.append(entry)
+    return labels
+
+
 @app.post("/chat", response_model=AIResponse)
 async def chat(req: ChatRequest):
+    query = req.message
+    language = detect_language(query)
+
+    # --- Tier 0: is this conversation already handed to a human? ---
+    if await is_conversation_human_managed(req.conversation_id):
+        return AIResponse(
+            text=ALREADY_ESCALATED_MESSAGES.get(
+                language, ALREADY_ESCALATED_MESSAGES["en"]
+            ),
+            route="escalate",
+            language=language,
+        )
+
+    # --- Tier 1: did the user explicitly ask for a human? ---
+    if wants_human_by_keyword(query) or await wants_human_by_intent(query):
+        await mark_conversation_human_managed(req.conversation_id, language)
+        return AIResponse(
+            text=ESCALATION_MESSAGES.get(language, ESCALATION_MESSAGES["en"]),
+            intent="escalation_request",
+            category="human_handoff_requested",
+            route="escalate",
+            language=language,
+        )
+
     if app.state.embedding_model is None:
         print("Loading embedding model...")
         app.state.embedding_model = SentenceTransformer(
@@ -84,18 +219,21 @@ async def chat(req: ChatRequest):
         print("Embedding model loaded.")
 
     model = app.state.embedding_model
-    query = req.message
-
-    language = detect_language(query)
     language_name = LANGUAGE_NAMES.get(language, language)
 
-    intent, category_hint = classify_intent(query)
+    # category here comes from the INTENT classifier (a sub-type
+    # within the intent, e.g. "pricing" within product_inquiry).
+    intent, category = classify_intent(query)
 
+    # TODO (next branch): category is "" for general_query here.
+    # Tier 2 LLM category fallback was prototyped but deferred.
+
+    # --- Deterministic bypass for hardware faults ---
     if intent == "hardware_fault":
         return AIResponse(
             text=HARDWARE_FAULT_DIAGNOSTIC,
             intent=intent,
-            category="pump_troubleshooting",
+            category=category or "pump_troubleshooting",
             confidence=1.0,
             route="deterministic",
             language=language,
@@ -113,26 +251,29 @@ async def chat(req: ChatRequest):
         f"route={route} needs_caveat={needs_caveat}"
     )
 
+    # --- Tier 2: KB match too weak, even though user didn't ask for
+    # a human explicitly. Distinct from Tier 1 above. ---
     if route == "escalate":
-        failure_reason = "no_kb_match" if top_distance is None or top_distance > 0.6 else "low_confidence"
+        failure_reason = (
+            "no_kb_match" if top_distance is None or top_distance > 0.6
+            else "low_confidence"
+        )
         await log_kb_gap(
             query_text=query,
             confidence=confidence,
             channel=req.channel,
             failure_reason=failure_reason,
         )
-        top_category = chunks[0]["category"] if chunks else ""
         return AIResponse(
-            text=ESCALATION_MESSAGE,
+            text=LOW_CONFIDENCE_MESSAGE,
             intent=intent,
-            category=top_category,
+            category=category,
             confidence=confidence,
             route="escalate",
             language=language,
-            sources=[str(chunk["id"]) for chunk in chunks],
+            sources=_build_source_labels(chunks),
         )
 
-  
     PER_CHUNK_DISTANCE_CUTOFF = 1.0
     relevant_chunks = [
         chunk for chunk in chunks
@@ -149,21 +290,14 @@ Conversation so far:
 """
 
     prompt = f"""
-You are an agricultural assistant for IrriHub, a company selling irrigation
-equipment in Kenya.
+You are an agricultural assistant for IrriHub, serving farmers in Kenya.
 
-STRICT RULES:
-1. Answer ONLY using facts explicitly stated in the Context below.
-2. Do NOT describe yourself, your role, your capabilities, or your
-   limitations. Never say things like "I am an assistant" or "I don't
-   have expertise in X" - these are not in the Context and must not
-   be invented.
-3. If the Context does not contain information that directly answers
-   the question, respond with EXACTLY this sentence and nothing else:
-   "I don't have that information — let me connect you with our support team."
-4. Do not guess, infer, or fill gaps with general knowledge about
-   irrigation or agriculture that isn't explicitly in the Context.
-5. Respond in {language_name} ({language}).
+Use the information provided in the context below to answer the user's question.
+- If the context fully answers the question, answer directly and confidently. Do not add any disclaimer about missing information.
+- If the context only partially answers the question, give the best answer you can from what's there, then briefly note which part you couldn't address.
+- Only if the context has nothing relevant to the question at all, say that you do not have enough information — do not say this after already giving a substantive answer.
+- The context may include reference material written for other countries or regions. If a detail in the context is tied to a specific country/region other than Kenya (e.g. local regulations, region-specific product availability), do not state it as if it applies locally — either omit it or clearly note it's from general/regional reference material rather than local guidance.
+Respond in {language_name} ({language}).
 
 Context:
 {context_text}
@@ -174,7 +308,6 @@ User question:
 
     answer = await generate_response(prompt)
 
-    # Medium-confidence band: respond, but add a caveat + escalation offer.
     if needs_caveat:
         answer += (
             "\n\n(I found some relevant information, but I'm not fully "
@@ -182,14 +315,12 @@ User question:
             "you'd like to speak with an agronomist.)"
         )
 
-    top_category = relevant_chunks[0]["category"] if relevant_chunks else ""
-
     return AIResponse(
         text=answer,
         intent=intent,
-        category=top_category,
+        category=category,
         confidence=confidence,
         route=route,
         language=language,
-        sources=[str(chunk["id"]) for chunk in relevant_chunks],
+        sources=_build_source_labels(relevant_chunks),
     )

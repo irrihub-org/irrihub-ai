@@ -1,0 +1,100 @@
+
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>IrriHub KB</title>
+
+<style>
+
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#f4f7f7;color:#1C2B2A}
+
+.hd{background:#1A7A6E;padding:20px 32px;display:flex;justify-content:space-between;align-items:center}.hd h1{color:#fff;font-size:22px}.hd span{color:#B2D8D4;font-size:14px}
+
+.ct{max-width:1100px;margin:0 auto;padding:24px}
+
+.sts{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}.sc{background:#fff;border-radius:12px;padding:20px;border-left:4px solid #1A7A6E}.sc .n{font-size:32px;font-weight:700;color:#1A7A6E}.sc .l{font-size:13px;color:#4A5E5D;margin-top:4px}
+
+.al{padding:12px 16px;border-radius:8px;margin-bottom:20px;font-size:14px}.al-s{background:#E8F5F3;color:#1A7A6E;border:1px solid #B2D8D4}.al-i{background:#FFF8E8;color:#8B6914;border:1px solid #F0D68A}
+
+.cd{background:#fff;border-radius:12px;padding:24px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,.06)}.cd h2{font-size:18px;color:#1A7A6E;margin-bottom:16px}
+
+.uz{border:2px dashed #B2D8D4;border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:.2s;background:#f9fefe}.uz:hover,.uz.dg{border-color:#1A7A6E;background:#E8F5F3}.uz p{color:#4A5E5D;margin-bottom:8px}.uz .fm{font-size:12px;color:#8B9D9C}.uz input[type=file]{display:none}.uz .ic{font-size:36px;margin-bottom:8px}
+
+.fr{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:16px}.fr select,.fr button{padding:10px 16px;border-radius:8px;font-size:14px;border:1px solid #D0E0DE}.fr button{background:#1A7A6E;color:#fff;border:none;cursor:pointer;font-weight:600}.fr button:hover{background:#156B60}.fr button:disabled{background:#8B9D9C;cursor:not-allowed}
+
+.fs{background:#E8F5F3;border-radius:8px;padding:10px 16px;margin-top:12px;display:none;font-size:14px;color:#1A7A6E}
+
+table{width:100%;border-collapse:collapse}th{text-align:left;padding:10px 12px;font-size:13px;color:#4A5E5D;border-bottom:2px solid #E8F5F3;font-weight:600}td{padding:12px;font-size:14px;border-bottom:1px solid #f0f4f4}tr:hover td{background:#f9fefe}
+
+.bg{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:500}.bg-a{background:#E8F5F3;color:#1A7A6E}.bg-i{background:#FEE;color:#D94F4F}.bg-en{background:#EEF0FF;color:#4A56A6}.bg-sw{background:#FFF5E8;color:#A67B2E}.bg-bilingual{background:#F0E8FF;color:#6B4AA6}.bg-c{background:#F4F7F7;color:#4A5E5D}
+
+.bs{padding:4px 12px;border-radius:6px;font-size:12px;border:none;cursor:pointer}.bd{background:#FEE;color:#D94F4F}.bd:hover{background:#FDD}.br{background:#E8F5F3;color:#1A7A6E}.br:hover{background:#D0EBE7}
+
+.em{text-align:center;padding:40px;color:#8B9D9C}.em .ic{font-size:48px;margin-bottom:12px}
+
+.sb input{width:100%;padding:12px 16px;border:1px solid #D0E0DE;border-radius:8px;font-size:14px;margin-bottom:12px}.sb input:focus{outline:none;border-color:#1A7A6E}
+
+.sr{background:#f9fefe;border-left:3px solid #1A7A6E;padding:12px;margin-bottom:8px;border-radius:0 8px 8px 0;font-size:13px}.sr .mt{color:#8B9D9C;font-size:11px;margin-top:4px}
+
+.ld{display:none;text-align:center;padding:20px}.ld.on{display:block}.sp{display:inline-block;width:24px;height:24px;border:3px solid #B2D8D4;border-top-color:#1A7A6E;border-radius:50%;animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
+
+@media(max-width:768px){.sts,.fr{grid-template-columns:1fr}}
+
+</style></head><body>
+
+<div class="hd"><h1>IrriHub Knowledge Base</h1><span>admin.irrihub.com</span></div>
+
+<div class="ct">
+
+{% set su=request.query_params.get('success') %}{% set ch=request.query_params.get('chunks') %}{% set ve=request.query_params.get('version') %}{% set de=request.query_params.get('deleted') %}{% set re=request.query_params.get('reactivated') %}
+
+{% if su %}<div class="al al-s">✅ <strong>{{su}}</strong> — {{ch}} chunks indexed (v{{ve}})</div>{% endif %}
+
+{% if de %}<div class="al al-i">Document deactivated.</div>{% endif %}
+
+{% if re %}<div class="al al-s">✅ Document reactivated.</div>{% endif %}
+
+<div class="sts"><div class="sc"><div class="n">{{stats.active_sources or 0}}</div><div class="l">Active Documents</div></div><div class="sc"><div class="n">{{stats.total_chunks or 0}}</div><div class="l">Total Chunks</div></div><div class="sc"><div class="n">{{stats.total_sources or 0}}</div><div class="l">All Versions</div></div></div>
+
+<div class="cd"><h2>Upload Document</h2>
+
+<form id="uf" action="/upload" method="post" enctype="multipart/form-data">
+
+<div class="uz" id="dz" onclick="document.getElementById('fi').click()"><div class="ic">📄</div><p><strong>Click to select</strong> or drag & drop</p><p class="fm">PDF · DOCX · CSV · TXT — Max 50MB</p><input type="file" id="fi" name="file" accept=".pdf,.docx,.csv,.txt" required></div>
+
+<div class="fs" id="fn"></div>
+
+<div class="fr"><select name="category" required><option value="" disabled selected>Category</option><option value="manuals">Irrigation Manuals</option><option value="faqs">Agronomist FAQs</option><option value="product-sheets">Product Sheets</option><option value="troubleshooting">Troubleshooting</option><option value="agronomy">Agronomy</option><option value="general">General</option></select>
+
+<select name="language" required><option value="en" selected>English</option><option value="sw">Swahili</option><option value="bilingual">Bilingual</option></select>
+
+<button type="submit" id="ub" disabled>Upload & Process</button></div></form>
+
+<div class="ld" id="ld"><div class="sp"></div><p style="margin-top:8px;color:#4A5E5D;font-size:13px">Parsing, chunking, embedding...</p></div></div>
+
+<div class="cd"><h2>Test RAG Search</h2><div class="sb"><input type="text" id="si" placeholder="Try: pump not working, bei ya drip irrigation..." onkeyup="ds()"></div><div id="rs"></div></div>
+
+<div class="cd"><h2>Documents</h2>
+
+{% if sources %}<table><thead><tr><th>Filename</th><th>Category</th><th>Lang</th><th>Chunks</th><th>Ver</th><th>Status</th><th>Uploaded</th><th></th></tr></thead><tbody>
+
+{% for d in sources %}<tr><td><strong>{{d.filename}}</strong></td><td><span class="bg bg-c">{{d.category}}</span></td><td><span class="bg bg-{{d.language}}">{{d.language}}</span></td><td>{{d.chunk_count}}</td><td>v{{d.version}}</td><td>{% if d.is_active %}<span class="bg bg-a">Active</span>{% else %}<span class="bg bg-i">Off</span>{% endif %}</td><td>{{d.uploaded_at.strftime('%b %d %H:%M') if d.uploaded_at else '-'}}</td><td>{% if d.is_active %}<form action="/delete/{{d.id}}" method="post" style="display:inline" onsubmit="return confirm('Deactivate?')"><button class="bs bd">Deactivate</button></form>{% else %}<form action="/reactivate/{{d.id}}" method="post" style="display:inline"><button class="bs br">Reactivate</button></form>{% endif %}</td></tr>{% endfor %}
+
+</tbody></table>{% else %}<div class="em"><div class="ic">📭</div><p>No documents yet. Upload above.</p></div>{% endif %}</div></div>
+
+<script>
+
+const fi=document.getElementById('fi'),fn=document.getElementById('fn'),ub=document.getElementById('ub'),dz=document.getElementById('dz'),uf=document.getElementById('uf'),ld=document.getElementById('ld');
+
+fi.onchange=()=>{if(fi.files.length){fn.style.display='block';fn.textContent='📎 '+fi.files[0].name+' ('+(fi.files[0].size/1048576).toFixed(1)+' MB)';ub.disabled=false}};
+
+dz.ondragover=e=>{e.preventDefault();dz.classList.add('dg')};dz.ondragleave=()=>dz.classList.remove('dg');
+
+dz.ondrop=e=>{e.preventDefault();dz.classList.remove('dg');if(e.dataTransfer.files.length){fi.files=e.dataTransfer.files;fi.dispatchEvent(new Event('change'))}};
+
+uf.onsubmit=()=>{ub.disabled=true;ub.textContent='Processing...';ld.classList.add('on')};
+
+let t;function ds(){clearTimeout(t);t=setTimeout(sr,400)}
+
+async function sr(){const q=document.getElementById('si').value.trim(),r=document.getElementById('rs');if(!q||q.length<2){r.innerHTML='';return}
+
+try{const d=await(await fetch('/search?q='+encodeURIComponent(q))).json();r.innerHTML=d.results.length?d.results.map(x=>`<div class="sr">${x.chunk}${x.chunk.length>=300?'...':''}<div class="mt">📄 ${x.source} (v${x.version}) · ${x.category} · ${x.language} · ${x.distance}</div></div>`).join(''):'<p style="color:#8B9D9C;padding:12px;font-size:13px">No matches.</p>'}catch(e){r.innerHTML='<p style="color:#D94F4F;padding:12px;font-size:13px">Error</p>'}}
+
+</script></body></html>
