@@ -44,12 +44,22 @@ async def fetch_top_k(
     embedding: list[float],
     k: int = 5,
 ):
+    """
+    Returns top-k chunks, each including:
+      - distance: pgvector cosine distance (0=identical, 2=opposite),
+        used by the confidence gate (see escalation.py).
+      - source_filename: the human-readable document filename this
+        chunk came from, used to build readable entries in the
+        response's sources field (see main.py's _build_source_labels).
+    """
     pool = await get_pool()
 
     query = """
     SELECT
         kd.id,
-        kd.chunk_text
+        kd.chunk_text,
+        ks.filename AS source_filename,
+        kd.embedding <=> $1 AS distance
     FROM kb_documents kd
     JOIN kb_sources ks
         ON kd.source_id = ks.id
@@ -75,13 +85,11 @@ async def is_conversation_human_managed(conversation_id: str) -> bool:
     of every /chat call.
     """
     pool = await get_pool()
-
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT is_human_managed FROM sessions WHERE conversation_id = $1",
             conversation_id,
         )
-
     return bool(row and row["is_human_managed"])
 
 
@@ -89,7 +97,6 @@ async def mark_conversation_human_managed(
     conversation_id: str, language: str
 ) -> None:
     pool = await get_pool()
-
     async with pool.acquire() as conn:
         await conn.execute(
             """

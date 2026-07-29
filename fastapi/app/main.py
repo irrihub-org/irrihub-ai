@@ -1,19 +1,24 @@
 from contextlib import asynccontextmanager
+import re
 
 from fastapi import FastAPI
 from langdetect import detect_langs, DetectorFactory, LangDetectException
-
-# langdetect uses a random seed internally by default, which makes
-# results non-deterministic across runs. Seed it for consistency.
-DetectorFactory.seed = 0
-
-SUPPORTED_LANGUAGES = {"en", "sw"}
 from sentence_transformers import SentenceTransformer
 
 from app.rag import retrieve_top_k
 from app.llm import generate_response, OPENROUTER_CLASSIFIER_MODELS
 from app.models import ChatRequest, AIResponse
 from app.db import is_conversation_human_managed, mark_conversation_human_managed
+from app.intent import classify_intent
+from app.escalation import determine_route, log_kb_gap
+
+DetectorFactory.seed = 0
+SUPPORTED_LANGUAGES = {"en", "sw"}
+
+LANGUAGE_NAMES = {
+    "en": "English",
+    "sw": "Swahili",
+}
 
 INTENT_CLASSIFIER_SYSTEM_PROMPT = (
     "You classify a single user message for a customer support chatbot. "
@@ -25,75 +30,6 @@ INTENT_CLASSIFIER_SYSTEM_PROMPT = (
     "try to answer itself.\n"
     "Reply with only ESCALATE or CONTINUE, nothing else."
 )
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Don't load the model during startup
-    app.state.embedding_model = None
-    yield
-
-
-app = FastAPI(
-    title="IrriHub AI",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "service": "irrihub-fastapi",
-        "version": "0.1.0",
-    }
-
-
-@app.get("/")
-async def root():
-    return {
-        "message": "IrriHub AI — endpoint not configured yet"
-    }
-
-
-def detect_language(text: str) -> str:
-    """
-    Detect the language of the user's message, constrained to the
-    languages this system actually supports (en, sw). Falls back to
-    'en' if detection fails entirely (e.g. message too short/empty).
-
-    langdetect recognises 55+ languages, but on short or ambiguous
-    text it can confidently return something completely unrelated
-    (e.g. 'it', 'tl') that this system has no business acting on.
-    Rather than trust its raw top guess, we look at ALL of its
-    candidate guesses and pick whichever of our two supported
-    languages scored highest. If neither en nor sw appears in its
-    candidates at all, we default to 'en'.
-
-    NOTE: langdetect is not trained on Sheng (Kenyan slang), so Sheng
-    messages will likely be detected as 'sw' or occasionally 'en'.
-    Sheng normalisation (build order Step 4) should run BEFORE this
-    once normalise.py exists, since normalising Sheng into standard
-    Swahili first will make detection more reliable.
-    """
-    try:
-        candidates = detect_langs(text)
-    except LangDetectException:
-        return "en"
-
-    supported_candidates = [c for c in candidates if c.lang in SUPPORTED_LANGUAGES]
-
-    if not supported_candidates:
-        return "en"
-
-    return supported_candidates[0].lang
-
-
-LANGUAGE_NAMES = {
-    "en": "English",
-    "sw": "Swahili",
-}
 
 # Phrases that mean the user wants a human, regardless of what the KB
 # contains. Checked before RAG/LLM so escalation never depends on the
@@ -117,14 +53,63 @@ ESCALATION_MESSAGES = {
     "sw": "Ninakuunganisha na mmoja wa wafanyakazi wetu — mtu atakusaidia hivi karibuni.",
 }
 
-# Once a conversation is escalated, a human owns it — the bot should
-# stay quiet rather than keep answering underneath them. This is the
-# message returned (with route="escalate") for any further /chat call
-# on a conversation already marked human-managed.
+# Once a conversation is escalated, a human owns it - the bot should
+# stay quiet rather than keep answering underneath them.
 ALREADY_ESCALATED_MESSAGES = {
     "en": "A team member is already helping with this conversation.",
     "sw": "Mfanyakazi wetu tayari anakusaidia katika mazungumzo haya.",
 }
+
+# Distinct from the explicit human-request escalation above - this
+# fires when the user DIDN'T ask for a human, but the KB genuinely has
+# nothing relevant (confidence gate, see escalation.py).
+LOW_CONFIDENCE_MESSAGE = (
+    "I'm not fully confident I have the right information for this. "
+    "Let me connect you with our support team who can help further."
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.embedding_model = None
+    yield
+
+
+app = FastAPI(
+    title="IrriHub AI",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "irrihub-fastapi",
+        "version": "0.1.0",
+    }
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "IrriHub AI — Welcome"
+    }
+
+
+def detect_language(text: str) -> str:
+    try:
+        candidates = detect_langs(text)
+    except LangDetectException:
+        return "en"
+
+    supported_candidates = [c for c in candidates if c.lang in SUPPORTED_LANGUAGES]
+
+    if not supported_candidates:
+        return "en"
+
+    return supported_candidates[0].lang
 
 
 def wants_human_by_keyword(text: str) -> bool:
@@ -147,10 +132,50 @@ async def wants_human_by_intent(text: str) -> bool:
             models=OPENROUTER_CLASSIFIER_MODELS,
         )
     except Exception as e:
-        print(f"Intent classification failed, defaulting to CONTINUE: {e}")
+        print(f"Intent classification failed ({type(e).__name__}), defaulting to CONTINUE: {e}")
         return False
 
     return verdict.strip().upper().startswith("ESCALATE")
+
+
+def _extract_chunk_label(chunk_text: str) -> str:
+    """
+    Derive a short, human-readable label describing what a chunk is
+    about, from its own content. Three patterns, checked in order:
+    1. FAQ-style chunks ("Q: ...\\nA: ...") -> use the question itself.
+    2. ALL-CAPS section headers (e.g. "TROUBLESHOOTING") -> use that.
+    3. Fallback -> a short truncated snippet of the first line.
+    """
+    first_line = chunk_text.strip().split("\n", 1)[0].strip()
+
+    if first_line.startswith("Q:"):
+        question = first_line[2:].strip()
+        return question if len(question) <= 80 else question[:77] + "..."
+
+    if re.fullmatch(r"[A-Z][A-Z\s]{2,}", first_line):
+        return first_line.title()
+
+    return first_line if len(first_line) <= 60 else first_line[:57] + "..."
+
+
+def _build_source_labels(chunks: list[dict]) -> list[str]:
+    """
+    Returns a deduplicated, order-preserving list of "filename —
+    label" strings, so the response's sources field is more specific
+    than a bare filename or a raw chunk UUID.
+    """
+    seen = set()
+    labels = []
+    for chunk in chunks:
+        filename = chunk.get("source_filename")
+        if not filename:
+            continue
+        label = _extract_chunk_label(chunk.get("chunk_text", ""))
+        entry = f"{filename} — {label}" if label else filename
+        if entry not in seen:
+            seen.add(entry)
+            labels.append(entry)
+    return labels
 
 
 @app.post("/chat", response_model=AIResponse)
@@ -158,6 +183,7 @@ async def chat(req: ChatRequest):
     query = req.message
     language = detect_language(query)
 
+    # --- Tier 0: is this conversation already handed to a human? ---
     if await is_conversation_human_managed(req.conversation_id):
         return AIResponse(
             text=ALREADY_ESCALATED_MESSAGES.get(
@@ -167,15 +193,17 @@ async def chat(req: ChatRequest):
             language=language,
         )
 
+    # --- Tier 1: did the user explicitly ask for a human? ---
     if wants_human_by_keyword(query) or await wants_human_by_intent(query):
         await mark_conversation_human_managed(req.conversation_id, language)
         return AIResponse(
             text=ESCALATION_MESSAGES.get(language, ESCALATION_MESSAGES["en"]),
+            intent="escalation_request",
+            category="human_handoff_requested",
             route="escalate",
             language=language,
         )
 
-    # Load the model only on the first request
     if app.state.embedding_model is None:
         print("Loading embedding model...")
         app.state.embedding_model = SentenceTransformer(
@@ -186,11 +214,53 @@ async def chat(req: ChatRequest):
     model = app.state.embedding_model
     language_name = LANGUAGE_NAMES.get(language, language)
 
+    # category here comes from the INTENT classifier (a sub-type
+    # within the intent, e.g. "pricing" within product_inquiry).
+    intent, category = classify_intent(query)
+
+
+
     chunks = await retrieve_top_k(query, model)
 
-    context_text = "\n".join(
-        chunk["chunk_text"] for chunk in chunks
+    top_distance = chunks[0]["distance"] if chunks else None
+    confidence, route, needs_caveat = determine_route(top_distance)
+
+    print(
+        f"[confidence-gate] query={query!r} "
+        f"top_distance={top_distance} confidence={confidence:.4f} "
+        f"route={route} needs_caveat={needs_caveat}"
     )
+
+    # --- Tier 2: KB match too weak, even though user didn't ask for
+    # a human explicitly. Distinct from Tier 1 above. ---
+    if route == "escalate":
+        failure_reason = (
+            "no_kb_match" if top_distance is None or top_distance > 0.6
+            else "low_confidence"
+        )
+        await log_kb_gap(
+            query_text=query,
+            confidence=confidence,
+            channel=req.channel,
+            failure_reason=failure_reason,
+        )
+        return AIResponse(
+            text=LOW_CONFIDENCE_MESSAGE,
+            intent=intent,
+            category=category,
+            confidence=confidence,
+            route="escalate",
+            language=language,
+            sources=_build_source_labels(chunks),
+        )
+
+    PER_CHUNK_DISTANCE_CUTOFF = 1.0
+    relevant_chunks = [
+        chunk for chunk in chunks
+        if chunk["distance"] is None or chunk["distance"] <= PER_CHUNK_DISTANCE_CUTOFF
+    ] or chunks[:1]
+
+    context_text = "\n".join(chunk["chunk_text"] for chunk in relevant_chunks)
 
     history_block = ""
     if req.conversation_history:
@@ -218,8 +288,19 @@ User question:
 
     answer = await generate_response(prompt)
 
+    if needs_caveat:
+        answer += (
+            "\n\n(I found some relevant information, but I'm not fully "
+            "certain this fully answers your question — let me know if "
+            "you'd like to speak with an agronomist.)"
+        )
+
     return AIResponse(
         text=answer,
+        intent=intent,
+        category=category,
+        confidence=confidence,
+        route=route,
         language=language,
-        sources=[str(chunk["id"]) for chunk in chunks],
+        sources=_build_source_labels(relevant_chunks),
     )
