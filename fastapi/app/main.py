@@ -11,6 +11,7 @@ from app.models import ChatRequest, AIResponse
 from app.db import is_conversation_human_managed, mark_conversation_human_managed
 from app.intent import classify_intent
 from app.escalation import determine_route, log_kb_gap
+from app.category_classifier import classify_category_llm
 
 DetectorFactory.seed = 0
 SUPPORTED_LANGUAGES = {"en", "sw"}
@@ -218,7 +219,14 @@ async def chat(req: ChatRequest):
     # within the intent, e.g. "pricing" within product_inquiry).
     intent, category = classify_intent(query)
 
+    # Tier 2: keyword classification didn't find a category (only
+    # happens for general_query) - fall back to a cheap LLM call so
+    # category is never blank. Mirrors the escalation classifier's
+    # keyword-first, LLM-fallback pattern above.
+    if not category:
+        category = await classify_category_llm(query)
 
+    
 
     chunks = await retrieve_top_k(query, model)
 
@@ -231,8 +239,8 @@ async def chat(req: ChatRequest):
         f"route={route} needs_caveat={needs_caveat}"
     )
 
-    # --- Tier 2: KB match too weak, even though user didn't ask for
-    # a human explicitly. Distinct from Tier 1 above. ---
+    # Tier 2: KB match too weak, even though user didn't ask for
+    # a human explicitly. Distinct from Tier 1 above. 
     if route == "escalate":
         failure_reason = (
             "no_kb_match" if top_distance is None or top_distance > 0.6
@@ -271,13 +279,34 @@ Conversation so far:
 
     prompt = f"""
 You are an agricultural assistant for IrriHub, serving farmers in Kenya.
+You handle two different kinds of questions differently:
 
-Use the information provided in the context below to answer the user's question.
-- If the context fully answers the question, answer directly and confidently. Do not add any disclaimer about missing information.
-- If the context only partially answers the question, give the best answer you can from what's there, then briefly note which part you couldn't address.
-- Only if the context has nothing relevant to the question at all, say that you do not have enough information — do not say this after already giving a substantive answer.
-- The context may include reference material written for other countries or regions. If a detail in the context is tied to a specific country/region other than Kenya (e.g. local regulations, region-specific product availability), do not state it as if it applies locally — either omit it or clearly note it's from general/regional reference material rather than local guidance.
-Respond in {language_name} ({language}).
+1. IRRIHUB-SPECIFIC QUESTIONS (products, pricing, availability, installation
+   steps, troubleshooting, warranty, company policies): answer ONLY using
+   the Context below. Never invent prices, specs, or steps that aren't
+   explicitly there. If the Context has nothing relevant to this type of
+   question, say you do not have enough information and offer to connect
+   the user with support.
+
+2. GENERAL AGRONOMY / FARMING KNOWLEDGE QUESTIONS (crop facts, growing
+   conditions, general agricultural practices - not specific to IrriHub's
+   products or services): you may answer using your own general knowledge,
+   even if nothing relevant appears in the Context, and even if the
+   question isn't about Kenya. Do not refuse or claim ignorance just
+   because the Context doesn't cover it - the Context is only required
+   for IrriHub-specific questions, not general agricultural knowledge.
+
+Rules that apply to both:
+- If the Context fully answers the question, answer directly and
+  confidently. Do not add a disclaimer about missing information.
+- If the Context only partially answers the question, give the best
+  answer you can from what's there, then note what it didn't cover.
+- The Context may include reference material written for other countries
+  or regions. If a Context detail is tied to a specific country/region
+  other than Kenya (e.g. local regulations, region-specific product
+  availability), do not present it as if it applies locally in Kenya -
+  either omit it or clearly note it's general/regional reference material.
+- Respond in {language_name} ({language}).
 
 Context:
 {context_text}
