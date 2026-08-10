@@ -55,7 +55,14 @@ def extract_text(filepath, filename):
         return "\n".join(p.text for p in Document(filepath).paragraphs if p.text.strip())
     raise ValueError(f"Unsupported: {ext}")
 
-def chunk_text(text):
+
+def chunk_text(text, row_based=False):
+    if row_based:
+        # CSV rows are already one self-contained record per "\n\n"-separated
+        # block (see extract_text) - chunk on that boundary instead of raw
+        # word count, so unrelated rows never get merged into one embedding.
+        return [r.strip() for r in text.split("\n\n") if r.strip() and len(r.strip()) > 20]
+
     words = text.split()
     chunks, start = [], 0
     while start < len(words):
@@ -102,7 +109,7 @@ async def upload_document(file: UploadFile=File(...), category: str=Form(...), l
     try:
         raw = extract_text(tmp, file.filename)
         if not raw.strip(): raise HTTPException(400,"No text extracted")
-        chunks = chunk_text(raw)
+        chunks = chunk_text(raw, row_based=(ext == ".csv"))
         if not chunks: raise HTTPException(400,"No usable chunks")
         embeddings = embed_chunks(chunks)
         async with db_pool.acquire() as conn:
