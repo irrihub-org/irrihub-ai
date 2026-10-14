@@ -12,6 +12,10 @@ from app.db import is_conversation_human_managed, mark_conversation_human_manage
 from app.intent import classify_intent
 from app.escalation import determine_route, log_kb_gap
 from app.category_classifier import classify_category_llm
+from app.contact_capture import (
+    acknowledgement as contact_acknowledgement,
+    extract_contact_details,
+)
 
 DetectorFactory.seed = 0
 SUPPORTED_LANGUAGES = {"en", "sw"}
@@ -203,6 +207,29 @@ async def chat(req: ChatRequest):
             category="human_handoff_requested",
             route="escalate",
             language=language,
+        )
+
+    # --- Tier 1b: is this message the visitor's contact details? ---
+    # Before retrieval, because a phone number, an email or a bare name
+    # is not a question: embedding one returns whatever happens to be
+    # nearest and the model then answers that. See contact_capture.
+    contact_details = extract_contact_details(query, req.conversation_history)
+    if contact_details:
+        print(
+            f"[contact-capture] conversation={req.conversation_id} "
+            f"captured={sorted(contact_details)}"
+        )
+        return AIResponse(
+            text=contact_acknowledgement(contact_details, language),
+            intent="contact_details_provided",
+            category="lead_capture",
+            confidence=1.0,
+            # route stays "escalate" so the n8n branch that labels the
+            # conversation and assigns a human still fires. These details
+            # are only worth capturing if somebody follows up.
+            route="escalate",
+            language=language,
+            crm_payload=contact_details,
         )
 
     if app.state.embedding_model is None:
