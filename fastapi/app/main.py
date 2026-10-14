@@ -16,6 +16,7 @@ from app.contact_capture import (
     acknowledgement as contact_acknowledgement,
     extract_contact_details,
 )
+from app.lead_summary import summarise_request
 
 DetectorFactory.seed = 0
 SUPPORTED_LANGUAGES = {"en", "sw"}
@@ -197,6 +198,37 @@ def _build_source_labels(chunks: list[dict]) -> list[str]:
     return labels
 
 
+async def _lead_payload(
+    req: ChatRequest,
+    query: str,
+    contact_details: dict | None = None,
+) -> dict:
+    """What the CRM needs to make this lead actionable on its own.
+
+    Chatwoot auto-resolves an escalated conversation after 10 minutes of
+    inactivity, and that stays until WhatsApp lands — so a rep cannot
+    rely on going back to read the chat. Everything they need to make the
+    callback has to travel with the lead: who it is, and what they asked
+    for.
+    """
+    payload: dict = dict(contact_details or {})
+
+    # The sender block is whatever Chatwoot already knows (pre-chat form,
+    # previous conversation). Details captured in this conversation win,
+    # since the visitor just typed them.
+    if req.sender:
+        if req.sender.name and "full_name" not in payload:
+            payload["full_name"] = req.sender.name
+        if req.sender.email and "email" not in payload:
+            payload["email"] = req.sender.email
+
+    summary = await summarise_request(req.conversation_history or query)
+    if summary:
+        payload["summary"] = summary
+
+    return payload
+
+
 @app.post("/chat", response_model=AIResponse)
 async def chat(req: ChatRequest):
     query = req.message
@@ -221,6 +253,7 @@ async def chat(req: ChatRequest):
             category="human_handoff_requested",
             route="escalate",
             language=language,
+            crm_payload=await _lead_payload(req, query),
         )
 
     # --- Tier 1b: is this message the visitor's contact details? ---
@@ -243,7 +276,7 @@ async def chat(req: ChatRequest):
             # are only worth capturing if somebody follows up.
             route="escalate",
             language=language,
-            crm_payload=contact_details,
+            crm_payload=await _lead_payload(req, query, contact_details),
         )
 
     if app.state.embedding_model is None:
@@ -301,6 +334,7 @@ async def chat(req: ChatRequest):
             route="escalate",
             language=language,
             sources=_build_source_labels(chunks),
+            crm_payload=await _lead_payload(req, query),
         )
 
     PER_CHUNK_DISTANCE_CUTOFF = 1.0

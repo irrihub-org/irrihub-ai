@@ -74,7 +74,11 @@ wf.nodes.push({
       '  "email": {{ JSON.stringify($json.crm_payload?.email ?? $(\'Squize Webhook Data\').item.json.data.meta?.sender?.email ?? null) }},',
       '  "actor_type": "farmer",',
       '  "language": {{ JSON.stringify($json.language ?? "en") }},',
-      '  "reason": {{ JSON.stringify($json.category === "lead_capture" ? "Visitor provided contact details in chat" : "Escalated to a human agent by the AI assistant") }}',
+      '  "reason": {{ JSON.stringify($json.category === "lead_capture" ? "Visitor provided contact details in chat" : "Escalated to a human agent by the AI assistant") }},',
+      // One line on what the farmer actually asked for. Chatwoot
+      // auto-resolves the conversation after 10 minutes, so this is
+      // often all the rep has to go on when they make the callback.
+      '  "summary": {{ JSON.stringify($json.crm_payload?.summary ?? null) }}',
       '}',
     ].join('\n'),
     options: {},
