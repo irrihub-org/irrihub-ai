@@ -53,9 +53,22 @@ ESCALATION_PHRASES = {
     "customer service",
 }
 
+# Asks for a name as part of the handoff. Without it a lead reaches the
+# CRM as "Chatwoot Visitor" and the rep calling the list has no idea who
+# they are phoning. The ask is phrased as part of the handoff rather than
+# a separate question, so it does not read as a form to fill in, and the
+# wording matches a marker in contact_capture so a one-word reply is
+# recognised as a name rather than sent to the knowledge base.
 ESCALATION_MESSAGES = {
-    "en": "I'm connecting you with one of our team members — someone will be with you shortly.",
-    "sw": "Ninakuunganisha na mmoja wa wafanyakazi wetu — mtu atakusaidia hivi karibuni.",
+    "en": (
+        "I'm connecting you with one of our team members — someone will be "
+        "with you shortly. May I have your name so they know who they're "
+        "speaking with?"
+    ),
+    "sw": (
+        "Ninakuunganisha na mmoja wa wafanyakazi wetu — mtu atakusaidia hivi "
+        "karibuni. Naomba jina lako ili wajue wanazungumza na nani?"
+    ),
 }
 
 # Once a conversation is escalated, a human owns it - the bot should
@@ -70,7 +83,8 @@ ALREADY_ESCALATED_MESSAGES = {
 # nothing relevant (confidence gate, see escalation.py).
 LOW_CONFIDENCE_MESSAGE = (
     "I'm not fully confident I have the right information for this. "
-    "Let me connect you with our support team who can help further."
+    "Let me connect you with our support team who can help further. "
+    "May I have your name so they know who they're speaking with?"
 )
 
 

@@ -42,8 +42,21 @@ _NAME_ASK_MARKERS = (
     "your name",
     "may i have your name",
     "who am i speaking",
+    "who they're speaking with",
     "how can we reach you",
     "provide me with your name",
+    # Swahili handoff wording — see ESCALATION_MESSAGES in main.py.
+    "jina lako",
+    "wanazungumza na nani",
+)
+
+# "My name is Lydia", "I am Lydia", "Hi, this is Lydia" — an explicit
+# self-introduction is unambiguous, so it is captured whether or not we
+# asked first.
+_NAME_INTRO_RE = re.compile(
+    r"\b(?:my name is|i am|i'm|this is|naitwa|jina langu ni)\s+"
+    r"([A-Za-z'’\-]+(?:\s+[A-Za-z'’\-]+){0,3})",
+    re.IGNORECASE,
 )
 
 # Words that look like a name by shape but are plainly something else, so
@@ -112,29 +125,55 @@ def extract_contact_details(
     if phone_match:
         found["phone"] = _normalise_phone(phone_match.group(0))
 
+    # An explicit self-introduction is unambiguous, so it is read whether
+    # or not we asked — and alongside a phone or email, since "I'm Lydia,
+    # call me on 0721716571" carries both.
+    intro = _NAME_INTRO_RE.search(text)
+    if intro:
+        candidate = _clean_name(intro.group(1))
+        if candidate:
+            found["full_name"] = candidate
+            return found
+
     if found:
         return found
 
-    # Name detection runs only when nothing else matched AND the bot
-    # asked — the weakest signal, so it gets the tightest gate.
+    # A bare name has no signal of its own — "Lydia" and "maize" are
+    # both single words — so it is only read when the assistant asked in
+    # the preceding messages.
     if not _bot_asked_for_contact(conversation_history):
-        return found
-
-    words = text.split()
-    if not 1 <= len(words) <= MAX_NAME_WORDS:
-        return found
-
-    if text.lower().rstrip("?.!") in _NOT_NAMES:
         return found
 
     # A question is not a name, however short.
     if "?" in text:
         return found
 
-    if all(re.fullmatch(r"[A-Za-z'’\-]+", w) for w in words):
-        found["full_name"] = " ".join(w.capitalize() for w in words)
+    candidate = _clean_name(text)
+    if candidate:
+        found["full_name"] = candidate
 
     return found
+
+
+def _clean_name(raw: str) -> str | None:
+    """Validate and title-case a name candidate, or None if it isn't one."""
+    words = raw.strip().rstrip(".!,").split()
+
+    if not 1 <= len(words) <= MAX_NAME_WORDS:
+        return None
+
+    if " ".join(words).lower() in _NOT_NAMES:
+        return None
+
+    # A single filler word ("yes", "asante") is never a name even when it
+    # arrives inside a longer candidate.
+    if any(w.lower() in _NOT_NAMES for w in words):
+        return None
+
+    if not all(re.fullmatch(r"[A-Za-z'’\-]+", w) for w in words):
+        return None
+
+    return " ".join(w.capitalize() for w in words)
 
 
 def acknowledgement(details: dict, language: str = "en") -> str:

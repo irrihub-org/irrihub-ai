@@ -81,6 +81,51 @@ def test_a_phone_is_captured_even_without_being_asked():
     }
 
 
+def test_self_introduction_is_captured_without_being_asked():
+    """An explicit introduction is unambiguous, unlike a bare name."""
+    for said, expected in [
+        ("My name is Lydia", "Lydia"),
+        ("my name is lydia wanjiku", "Lydia Wanjiku"),
+        ("I am Lydia", "Lydia"),
+        ("I'm Lydia", "Lydia"),
+        ("Hi, this is Lydia", "Lydia"),
+        ("naitwa Lydia", "Lydia"),
+    ]:
+        assert extract_contact_details(said, None) == {
+            "full_name": expected
+        }, said
+
+
+def test_name_and_phone_in_one_message():
+    """'I'm Lydia, call me on 0721716571' must not lose the name."""
+    got = extract_contact_details("I'm Lydia, call me on 0721716571", None)
+    assert got["full_name"] == "Lydia"
+    assert got["phone"] == "+254721716571"
+
+
+def test_the_new_handoff_wording_primes_name_capture():
+    """The escalation message must match a marker, or the reply to it
+    goes to the knowledge base instead of being read as a name."""
+    handoff = (
+        "[ASSISTANT] : I'm connecting you with one of our team members — "
+        "someone will be with you shortly. May I have your name so they "
+        "know who they're speaking with?"
+    )
+    assert extract_contact_details("Lydia", handoff) == {"full_name": "Lydia"}
+
+
+def test_swahili_handoff_wording_primes_name_capture():
+    handoff = "[ASSISTANT] : Naomba jina lako ili wajue wanazungumza na nani?"
+    assert extract_contact_details("Wanjiku", handoff) == {
+        "full_name": "Wanjiku"
+    }
+
+
+def test_an_introduction_of_a_non_name_is_rejected():
+    assert extract_contact_details("I am ok", None) == {}
+    assert extract_contact_details("this is maize", None) == {}
+
+
 def test_short_pleasantries_are_not_names():
     for word in ["yes", "no", "ok", "thanks", "hello", "asante", "sawa"]:
         assert extract_contact_details(word, ASKED) == {}, word
