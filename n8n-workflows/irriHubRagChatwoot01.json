@@ -171,7 +171,7 @@
           },
           "sendBody": true,
           "specifyBody": "json",
-          "jsonBody": "={\n  \"conversation_id\": \"{{ $('Squize Webhook Data').item.json.data.conv_id }}\",\n  \"account_id\": \"{{ $('Squize Webhook Data').item.json.data.account_id }}\",\n  \"message\": \"{{ $('Squize Webhook Data').item.json.data.message_content }}\",\n  \"conversation_history\": {{ JSON.stringify($json.conversation_text) }},\n  \"channel\": \"{{ $('Squize Webhook Data').item.json.data.channel_type }}\"\n}",
+          "jsonBody": "={\n  \"conversation_id\": \"{{ $('Squize Webhook Data').item.json.data.conv_id }}\",\n  \"account_id\": \"{{ $('Squize Webhook Data').item.json.data.account_id }}\",\n  \"message\": \"{{ $('Squize Webhook Data').item.json.data.message_content }}\",\n  \"conversation_history\": {{ JSON.stringify($json.conversation_text) }},\n  \"channel\": \"{{ $('Squize Webhook Data').item.json.data.channel_type }}\",\n  \"sender\": {\n    \"name\": {{ JSON.stringify($('Squize Webhook Data').item.json.data.meta?.sender?.name ?? null) }},\n    \"email\": {{ JSON.stringify($('Squize Webhook Data').item.json.data.meta?.sender?.email ?? null) }},\n    \"phone\": {{ JSON.stringify($('Squize Webhook Data').item.json.data.meta?.sender?.phone_number ?? null) }}\n  }\n}",
           "options": {
             "timeout": 30000
           }

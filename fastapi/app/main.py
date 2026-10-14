@@ -17,6 +17,7 @@ from app.contact_capture import (
     extract_contact_details,
 )
 from app.lead_summary import summarise_request
+from app.handoff import build_handoff_message, LOW_CONFIDENCE_LEAD_IN
 
 DetectorFactory.seed = 0
 SUPPORTED_LANGUAGES = {"en", "sw"}
@@ -52,24 +53,6 @@ ESCALATION_PHRASES = {
     "real person",
     "customer care",
     "customer service",
-}
-
-# Asks for a name as part of the handoff. Without it a lead reaches the
-# CRM as "Chatwoot Visitor" and the rep calling the list has no idea who
-# they are phoning. The ask is phrased as part of the handoff rather than
-# a separate question, so it does not read as a form to fill in, and the
-# wording matches a marker in contact_capture so a one-word reply is
-# recognised as a name rather than sent to the knowledge base.
-ESCALATION_MESSAGES = {
-    "en": (
-        "I'm connecting you with one of our team members — someone will be "
-        "with you shortly. May I have your name so they know who they're "
-        "speaking with?"
-    ),
-    "sw": (
-        "Ninakuunganisha na mmoja wa wafanyakazi wetu — mtu atakusaidia hivi "
-        "karibuni. Naomba jina lako ili wajue wanazungumza na nani?"
-    ),
 }
 
 # Once a conversation is escalated, a human owns it - the bot should
@@ -221,6 +204,8 @@ async def _lead_payload(
             payload["full_name"] = req.sender.name
         if req.sender.email and "email" not in payload:
             payload["email"] = req.sender.email
+        if req.sender.phone and "phone" not in payload:
+            payload["phone"] = req.sender.phone
 
     summary = await summarise_request(req.conversation_history or query)
     if summary:
@@ -247,13 +232,18 @@ async def chat(req: ChatRequest):
     # --- Tier 1: did the user explicitly ask for a human? ---
     if wants_human_by_keyword(query) or await wants_human_by_intent(query):
         await mark_conversation_human_managed(req.conversation_id, language)
+        payload = await _lead_payload(req, query)
         return AIResponse(
-            text=ESCALATION_MESSAGES.get(language, ESCALATION_MESSAGES["en"]),
+            text=build_handoff_message(
+                language,
+                has_name=bool(payload.get("full_name")),
+                has_phone=bool(payload.get("phone")),
+            ),
             intent="escalation_request",
             category="human_handoff_requested",
             route="escalate",
             language=language,
-            crm_payload=await _lead_payload(req, query),
+            crm_payload=payload,
         )
 
     # --- Tier 1b: is this message the visitor's contact details? ---
@@ -326,15 +316,23 @@ async def chat(req: ChatRequest):
             channel=req.channel,
             failure_reason=failure_reason,
         )
+        payload = await _lead_payload(req, query)
         return AIResponse(
-            text=LOW_CONFIDENCE_MESSAGE,
+            text=build_handoff_message(
+                language,
+                has_name=bool(payload.get("full_name")),
+                has_phone=bool(payload.get("phone")),
+                lead_in=LOW_CONFIDENCE_LEAD_IN.get(
+                    language, LOW_CONFIDENCE_LEAD_IN["en"]
+                ),
+            ),
             intent=intent,
             category=category,
             confidence=confidence,
             route="escalate",
             language=language,
             sources=_build_source_labels(chunks),
-            crm_payload=await _lead_payload(req, query),
+            crm_payload=payload,
         )
 
     PER_CHUNK_DISTANCE_CUTOFF = 1.0

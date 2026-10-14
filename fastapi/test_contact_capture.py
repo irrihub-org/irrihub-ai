@@ -153,9 +153,20 @@ def test_empty_message_is_safe():
 
 
 def test_acknowledgement_repeats_what_was_captured():
+    """Read back the number so a typo is visible while it can still be
+    corrected."""
     text = acknowledgement({"phone": "+254721716571"})
     assert "+254721716571" in text
     assert "team" in text.lower()
+
+
+def test_acknowledgement_promises_a_callback_and_closes_the_chat():
+    """This is where the conversation ends — the handoff asked, the
+    visitor answered, nothing follows. It has to set the expectation."""
+    text = acknowledgement({"phone": "+254721716571"})
+    assert "call you back today" in text
+    assert "close this chat" in text
+    assert "shortly" not in text
 
 
 def test_acknowledgement_greets_by_name():

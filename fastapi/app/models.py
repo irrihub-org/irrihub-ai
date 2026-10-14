@@ -4,8 +4,17 @@ from pydantic import BaseModel, Field
 
 
 class Sender(BaseModel):
+    """What Chatwoot already knows about the contact.
+
+    Comes from the conversation's sender — a pre-chat form, or details
+    carried over from an earlier conversation. Lets the assistant ask
+    only for what is actually missing rather than asking for a name it
+    already has.
+    """
+
     name: Optional[str] = None
     email: Optional[str] = None
+    phone: Optional[str] = None
 
 
 class ChatRequest(BaseModel):

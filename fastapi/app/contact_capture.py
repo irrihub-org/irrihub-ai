@@ -179,41 +179,38 @@ def _clean_name(raw: str) -> str | None:
 def acknowledgement(details: dict, language: str = "en") -> str:
     """What to say back once details are captured.
 
-    Confirms what was heard so a mistake is visible to the visitor, and
-    repeats the promise that a human is coming — the point in the
-    conversation where they are most likely to give up.
+    Reads back what was heard, so a mistyped number is visible to the
+    visitor while they can still correct it, and commits to a callback
+    rather than implying someone is about to appear in the chat — the
+    conversation auto-resolves ten minutes after the handoff, so a
+    promise of an imminent reply is one the channel cannot keep.
     """
+    name = details.get("full_name")
+    captured = [details[k] for k in ("phone", "email") if k in details]
+
+    # This is where the conversation actually ends — the handoff asked a
+    # question, the visitor answered it, and nothing follows. So the
+    # closing line belongs here rather than on the handoff, which cannot
+    # say "I'll close this chat" in the same breath as asking something.
     if language == "sw":
-        if "full_name" in details and len(details) == 1:
-            return (
-                f"Asante {details['full_name']}! Nimehifadhi maelezo yako. "
-                "Mmoja wa washauri wetu atawasiliana nawe hivi karibuni."
-            )
+        greeting = f"Asante {name}!" if name else "Asante!"
+        body = (
+            f"Nimepokea {' na '.join(captured)}"
+            if captured
+            else "Nimehifadhi maelezo yako"
+        )
         return (
-            "Asante! Nimehifadhi mawasiliano yako. Mmoja wa washauri wetu "
-            "atawasiliana nawe hivi karibuni."
+            f"{greeting} {body} — timu yetu itakupigia leo. Nitafunga "
+            "mazungumzo haya sasa, lakini ombi lako liko kwao."
         )
 
-    if "full_name" in details and len(details) == 1:
-        return (
-            f"Thanks {details['full_name']}! I've noted your details — "
-            "someone from our team will be in touch shortly."
-        )
-
-    captured = []
-    if "phone" in details:
-        captured.append(details["phone"])
-    if "email" in details:
-        captured.append(details["email"])
-
-    if captured:
-        return (
-            f"Thanks! I've got {' and '.join(captured)} — someone from our "
-            "team will reach out shortly. Anything else I can help with "
-            "in the meantime?"
-        )
-
+    greeting = f"Thanks {name}!" if name else "Thanks!"
+    body = (
+        f"I've got {' and '.join(captured)}"
+        if captured
+        else "I've noted your details"
+    )
     return (
-        "Thanks! I've noted your details — someone from our team will be "
-        "in touch shortly."
+        f"{greeting} {body} — our team will call you back today. I'll close "
+        "this chat now, but your request is with them."
     )
