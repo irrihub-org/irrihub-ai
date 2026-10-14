@@ -12,6 +12,12 @@ from app.db import is_conversation_human_managed, mark_conversation_human_manage
 from app.intent import classify_intent
 from app.escalation import determine_route, log_kb_gap
 from app.category_classifier import classify_category_llm
+from app.contact_capture import (
+    acknowledgement as contact_acknowledgement,
+    extract_contact_details,
+)
+from app.lead_summary import summarise_request
+from app.handoff import build_handoff_message, LOW_CONFIDENCE_LEAD_IN
 
 DetectorFactory.seed = 0
 SUPPORTED_LANGUAGES = {"en", "sw"}
@@ -49,11 +55,6 @@ ESCALATION_PHRASES = {
     "customer service",
 }
 
-ESCALATION_MESSAGES = {
-    "en": "I'm connecting you with one of our team members — someone will be with you shortly.",
-    "sw": "Ninakuunganisha na mmoja wa wafanyakazi wetu — mtu atakusaidia hivi karibuni.",
-}
-
 # Once a conversation is escalated, a human owns it - the bot should
 # stay quiet rather than keep answering underneath them.
 ALREADY_ESCALATED_MESSAGES = {
@@ -66,7 +67,8 @@ ALREADY_ESCALATED_MESSAGES = {
 # nothing relevant (confidence gate, see escalation.py).
 LOW_CONFIDENCE_MESSAGE = (
     "I'm not fully confident I have the right information for this. "
-    "Let me connect you with our support team who can help further."
+    "Let me connect you with our support team who can help further. "
+    "May I have your name so they know who they're speaking with?"
 )
 
 
@@ -179,6 +181,39 @@ def _build_source_labels(chunks: list[dict]) -> list[str]:
     return labels
 
 
+async def _lead_payload(
+    req: ChatRequest,
+    query: str,
+    contact_details: dict | None = None,
+) -> dict:
+    """What the CRM needs to make this lead actionable on its own.
+
+    Chatwoot auto-resolves an escalated conversation after 10 minutes of
+    inactivity, and that stays until WhatsApp lands — so a rep cannot
+    rely on going back to read the chat. Everything they need to make the
+    callback has to travel with the lead: who it is, and what they asked
+    for.
+    """
+    payload: dict = dict(contact_details or {})
+
+    # The sender block is whatever Chatwoot already knows (pre-chat form,
+    # previous conversation). Details captured in this conversation win,
+    # since the visitor just typed them.
+    if req.sender:
+        if req.sender.name and "full_name" not in payload:
+            payload["full_name"] = req.sender.name
+        if req.sender.email and "email" not in payload:
+            payload["email"] = req.sender.email
+        if req.sender.phone and "phone" not in payload:
+            payload["phone"] = req.sender.phone
+
+    summary = await summarise_request(req.conversation_history or query)
+    if summary:
+        payload["summary"] = summary
+
+    return payload
+
+
 @app.post("/chat", response_model=AIResponse)
 async def chat(req: ChatRequest):
     query = req.message
@@ -197,12 +232,41 @@ async def chat(req: ChatRequest):
     # --- Tier 1: did the user explicitly ask for a human? ---
     if wants_human_by_keyword(query) or await wants_human_by_intent(query):
         await mark_conversation_human_managed(req.conversation_id, language)
+        payload = await _lead_payload(req, query)
         return AIResponse(
-            text=ESCALATION_MESSAGES.get(language, ESCALATION_MESSAGES["en"]),
+            text=build_handoff_message(
+                language,
+                has_name=bool(payload.get("full_name")),
+                has_phone=bool(payload.get("phone")),
+            ),
             intent="escalation_request",
             category="human_handoff_requested",
             route="escalate",
             language=language,
+            crm_payload=payload,
+        )
+
+    # --- Tier 1b: is this message the visitor's contact details? ---
+    # Before retrieval, because a phone number, an email or a bare name
+    # is not a question: embedding one returns whatever happens to be
+    # nearest and the model then answers that. See contact_capture.
+    contact_details = extract_contact_details(query, req.conversation_history)
+    if contact_details:
+        print(
+            f"[contact-capture] conversation={req.conversation_id} "
+            f"captured={sorted(contact_details)}"
+        )
+        return AIResponse(
+            text=contact_acknowledgement(contact_details, language),
+            intent="contact_details_provided",
+            category="lead_capture",
+            confidence=1.0,
+            # route stays "escalate" so the n8n branch that labels the
+            # conversation and assigns a human still fires. These details
+            # are only worth capturing if somebody follows up.
+            route="escalate",
+            language=language,
+            crm_payload=await _lead_payload(req, query, contact_details),
         )
 
     if app.state.embedding_model is None:
@@ -252,14 +316,23 @@ async def chat(req: ChatRequest):
             channel=req.channel,
             failure_reason=failure_reason,
         )
+        payload = await _lead_payload(req, query)
         return AIResponse(
-            text=LOW_CONFIDENCE_MESSAGE,
+            text=build_handoff_message(
+                language,
+                has_name=bool(payload.get("full_name")),
+                has_phone=bool(payload.get("phone")),
+                lead_in=LOW_CONFIDENCE_LEAD_IN.get(
+                    language, LOW_CONFIDENCE_LEAD_IN["en"]
+                ),
+            ),
             intent=intent,
             category=category,
             confidence=confidence,
             route="escalate",
             language=language,
             sources=_build_source_labels(chunks),
+            crm_payload=payload,
         )
 
     PER_CHUNK_DISTANCE_CUTOFF = 1.0

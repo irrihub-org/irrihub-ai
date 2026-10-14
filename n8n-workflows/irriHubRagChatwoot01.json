@@ -1,0 +1,607 @@
+[
+  {
+    "updatedAt": "2026-08-07T09:02:28.169Z",
+    "createdAt": "2026-07-23T08:59:54.932Z",
+    "id": "irriHubRagChatwoot01",
+    "name": "IrriHub AI Assistant for Chatwoot (RAG)",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "irrihub-chatwoot-v2",
+          "options": {}
+        },
+        "id": "950de2cd-cc0e-4de5-bb42-e43da1b12ced",
+        "name": "Chatwoot Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "position": [
+          688,
+          416
+        ],
+        "webhookId": "your-id-v2",
+        "typeVersion": 2.1
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "combinator": "and",
+            "conditions": [
+              {
+                "id": "e60a5d22-65b5-4500-b59b-cdf70b19c945",
+                "operator": {
+                  "name": "filter.operator.equals",
+                  "type": "string",
+                  "operation": "equals"
+                },
+                "leftValue": "={{ $json.data.message_type }}",
+                "rightValue": "incoming"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "11e50415-b414-4d32-9d02-744a57f49492",
+        "name": "Check If Incoming Message",
+        "type": "n8n-nodes-base.if",
+        "position": [
+          1136,
+          416
+        ],
+        "typeVersion": 2.2
+      },
+      {
+        "parameters": {
+          "url": "=http://chatwoot-app:3000/api/v1/accounts/{{ $('Squize Webhook Data').item.json.data.account_id }}/conversations/{{ $('Squize Webhook Data').item.json.data.conv_id }}",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "api_access_token",
+                "value": "REDACTED_CHATWOOT_TOKEN"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+        "name": "Get Conversation State",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          1360,
+          416
+        ],
+        "typeVersion": 4.2,
+        "retryOnFail": true
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "combinator": "and",
+            "conditions": [
+              {
+                "id": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+                "operator": {
+                  "name": "filter.operator.equals",
+                  "type": "boolean",
+                  "operation": "equals"
+                },
+                "leftValue": "={{ !!($json.meta && ((($json.meta.assignee || {}).id) || (($json.meta.team || {}).id))) }}",
+                "rightValue": true
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c",
+        "name": "Check If Already Assigned",
+        "type": "n8n-nodes-base.if",
+        "position": [
+          1520,
+          416
+        ],
+        "typeVersion": 2.2
+      },
+      {
+        "parameters": {
+          "url": "=http://chatwoot-app:3000/api/v1/accounts/{{ $('Squize Webhook Data').item.json.data.account_id }}/conversations/{{ $('Squize Webhook Data').item.json.data.conv_id }}/messages",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "api_access_token",
+                "value": "REDACTED_CHATWOOT_TOKEN"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "ff80e670-7290-411e-b624-9d40f477eae7",
+        "name": "Load Chatwoot Conversation History",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          1744,
+          480
+        ],
+        "typeVersion": 4.2,
+        "retryOnFail": true
+      },
+      {
+        "parameters": {
+          "jsCode": "// Build a plain-text conversation history string for the FastAPI /chat endpoint.\nconst defaultOutput = { \"conversation_text\": \"\" };\n\ntry {\n    const messages = $('Load Chatwoot Conversation History').first().json.payload;\n\n    if (Array.isArray(messages) && messages.length > 0) {\n        const fullHistory = messages.map(msg => {\n            const role = (msg.sender && msg.sender.type === 'contact') ? 'user' : 'assistant';\n            let content = msg.content || '';\n            if (content === '/start') {\n                content = 'Hello!';\n            }\n            return { role, content };\n        });\n\n        const filteredHistory = fullHistory.filter(msg => msg.content && msg.content.trim() !== '');\n\n        const conversationText = filteredHistory\n            .map(msg => `[${msg.role.toUpperCase()}] : ${msg.content}`)\n            .join(\", \\n\");\n\n        return [{ json: { \"conversation_text\": conversationText } }];\n    }\n\n    return [{ json: defaultOutput }];\n} catch (error) {\n    console.error(\"Error processing history:\", error.message);\n    return [{ json: defaultOutput }];\n}\n"
+        },
+        "id": "883b9d35-196e-4615-b1e4-e0010e40b7ee",
+        "name": "Process Loaded History",
+        "type": "n8n-nodes-base.code",
+        "position": [
+          1888,
+          256
+        ],
+        "typeVersion": 2
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://irrihub-fastapi:8000/chat",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"conversation_id\": \"{{ $('Squize Webhook Data').item.json.data.conv_id }}\",\n  \"account_id\": \"{{ $('Squize Webhook Data').item.json.data.account_id }}\",\n  \"message\": \"{{ $('Squize Webhook Data').item.json.data.message_content }}\",\n  \"conversation_history\": {{ JSON.stringify($json.conversation_text) }},\n  \"channel\": \"{{ $('Squize Webhook Data').item.json.data.channel_type }}\",\n  \"sender\": {\n    \"name\": {{ JSON.stringify($('Squize Webhook Data').item.json.data.meta?.sender?.name ?? null) }},\n    \"email\": {{ JSON.stringify($('Squize Webhook Data').item.json.data.meta?.sender?.email ?? null) }},\n    \"phone\": {{ JSON.stringify($('Squize Webhook Data').item.json.data.meta?.sender?.phone_number ?? null) }}\n  }\n}",
+          "options": {
+            "timeout": 30000
+          }
+        },
+        "id": "b1c9a001-1f2e-4a2b-9c3d-5e6f7a8b9c0d",
+        "name": "Call IrriHub RAG /chat",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          2192,
+          256
+        ],
+        "typeVersion": 4.2,
+        "retryOnFail": true
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "combinator": "and",
+            "conditions": [
+              {
+                "id": "f1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a5b",
+                "operator": {
+                  "name": "filter.operator.equals",
+                  "type": "string",
+                  "operation": "equals"
+                },
+                "leftValue": "={{ $json.route }}",
+                "rightValue": "escalate"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "d2e3f4a5-b6c7-48d9-9e0f-1a2b3c4d5e6f",
+        "name": "Check If Escalate",
+        "type": "n8n-nodes-base.if",
+        "position": [
+          2464,
+          256
+        ],
+        "typeVersion": 2.2
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=http://chatwoot-app:3000/api/v1/accounts/{{ $('Squize Webhook Data').item.json.data.account_id }}/conversations/{{ $('Squize Webhook Data').item.json.data.conv_id }}/messages",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "api_access_token",
+                "value": "REDACTED_CHATWOOT_TOKEN"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "content",
+                "value": "={{ $('Call IrriHub RAG /chat').item.json.text }}"
+              },
+              {
+                "name": "message_type",
+                "value": "outgoing"
+              },
+              {
+                "name": "private",
+                "value": "false"
+              },
+              {
+                "name": "content_type",
+                "value": "text"
+              },
+              {
+                "name": "content_attributes",
+                "value": "{}"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "5dc01277-c2c0-4748-ab69-1067507dec81",
+        "name": "Send AI Reply",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          2736,
+          176
+        ],
+        "typeVersion": 4.2
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=http://chatwoot-app:3000/api/v1/accounts/{{ $('Squize Webhook Data').item.json.data.account_id }}/conversations/{{ $('Squize Webhook Data').item.json.data.conv_id }}/messages",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "api_access_token",
+                "value": "REDACTED_CHATWOOT_TOKEN"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "content",
+                "value": "={{ $('Call IrriHub RAG /chat').item.json.text }}"
+              },
+              {
+                "name": "message_type",
+                "value": "outgoing"
+              },
+              {
+                "name": "private",
+                "value": "false"
+              },
+              {
+                "name": "content_type",
+                "value": "text"
+              },
+              {
+                "name": "content_attributes",
+                "value": "{}"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "6ed12388-d3e5-489f-a70a-2178618ec92e",
+        "name": "Send AI Reply (Escalated)",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          2736,
+          336
+        ],
+        "typeVersion": 4.2
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=http://chatwoot-app:3000/api/v1/accounts/{{ $('Squize Webhook Data').item.json.data.account_id }}/conversations/{{ $('Squize Webhook Data').item.json.data.conv_id }}/labels",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "api_access_token",
+                "value": "REDACTED_CHATWOOT_TOKEN"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"labels\": [\"needs-human\"]\n}",
+          "options": {}
+        },
+        "id": "7fe23499-e4f6-4a90-b81b-3289729fd03f",
+        "name": "Label Conversation for Escalation",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          3008,
+          336
+        ],
+        "typeVersion": 4.2
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=http://chatwoot-app:3000/api/v1/accounts/{{ $('Squize Webhook Data').item.json.data.account_id }}/conversations/{{ $('Squize Webhook Data').item.json.data.conv_id }}/assignments",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "api_access_token",
+                "value": "REDACTED_CHATWOOT_TOKEN"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"team_id\": 1\n}",
+          "options": {}
+        },
+        "id": "9a1b2c3d-4e5f-4a6b-8c7d-1e2f3a4b5c6d",
+        "name": "Assign Conversation to Support Team",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [
+          3280,
+          336
+        ],
+        "typeVersion": 4.2
+      },
+      {
+        "content": "## Escalation Routing\n\nEscalated conversations are assigned to the Chatwoot \"Support\" Team (id 1, members: Lee Test, Bernice), not a single hardcoded agent. Chatwoot's own auto-assignment then routes to whichever team member is online.\n\nTo add/remove agents from escalation routing, edit the Support team's membership directly in Chatwoot (Settings > Teams), not this workflow. To route to a different team, change the `team_id` value in the \"Assign Conversation to Support Team\" node's JSON body.",
+        "height": 180,
+        "width": 320,
+        "id": "3c4d5e6f-7a8b-4c9d-9e0f-4a5b6c7d8e9f",
+        "name": "Sticky Note - Assignee Config",
+        "type": "n8n-nodes-base.stickyNote",
+        "position": [
+          3280,
+          80
+        ],
+        "typeVersion": 1
+      },
+      {
+        "content": "## Multichannel AI Assistant for Chatwoot — RAG Edition\n\nThis replaces the demo's built-in LangChain LLM node with a call to the deployed FastAPI RAG pipeline (`http://irrihub-fastapi:8000/chat`), which:\n\n* Detects language (en/sw)\n* Retrieves grounded context from the pgvector knowledge base\n* Generates a response via OpenRouter using that context\n* Returns a `route` field (`respond` / `escalate` / `deterministic`)\n\nOn `route == \"escalate\"`, the workflow now: sends the AI's handoff reply, labels the conversation `needs-human`, AND assigns it to a real Chatwoot agent (see \"Escalation Assignee Config\" node) so someone actually gets notified — not just a label sitting unattended.\n\nThe FastAPI side also tracks escalated conversations in its own `sessions` table (`is_human_managed`), so if /chat is ever called on an escalated conversation it won't answer the question. But the workflow now goes a step further: right after confirming the message is incoming, it calls Chatwoot directly (\"Get Conversation State\") and checks `meta.assignee` (the GET /conversations/{id} response nests assignment under `meta.assignee`, NOT a top-level `assignee_id` field). If the conversation is already assigned to anyone (bot-escalated or manually assigned by staff), the workflow stops immediately and posts NOTHING back — no canned \"a team member is already helping\" spam on every message once a human has taken over.\n\n### Setup notes\n1. Reuses the same Chatwoot `api_access_token` as the original demo workflow (hardcoded in the HTTP nodes, matching prior practice). Consider migrating to an n8n credential later for better secret hygiene.\n2. Confirm `irrihub-fastapi` and `irrihub-n8n` remain on the shared `irrihub-net` Docker network (already true today).\n3. Update the \"Escalation Assignee Config\" node's assigneeId if the Chatwoot agent roster changes.",
+        "height": 460,
+        "width": 620,
+        "id": "8a1b2c3d-4e5f-4061-8273-940a1b2c3d4e",
+        "name": "Sticky Note - RAG Edition",
+        "type": "n8n-nodes-base.stickyNote",
+        "position": [
+          0,
+          -96
+        ],
+        "typeVersion": 1
+      },
+      {
+        "id": "ab98fd9c-8b2d-4d44-b645-2ac48ea119c4",
+        "name": "Squize Webhook Data",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          912,
+          416
+        ],
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "const body = $json.body;\n\n// Chatwoot sends two different payload shapes depending on delivery path:\n// - Account-level webhook (event \"message_created\"): flat, message fields\n//   directly on body (body.content, body.message_type as a string).\n// - Automation-rule webhook (event \"automation_event.message_created\"):\n//   body IS the conversation object; the actual message is the last item\n//   in body.messages, and message_type is numeric (0 = incoming, 1 = outgoing).\nconst isAutomationEvent = (body.event || '').startsWith('automation_event.');\n\nlet message, inboxId, inboxTitle, convId, channelType, accountId, accountName;\n\nif (isAutomationEvent) {\n  message = (body.messages && body.messages[body.messages.length - 1]) || {};\n  inboxId = body.inbox_id;\n  inboxTitle = undefined;\n  convId = body.id;\n  channelType = body.channel;\n  accountId = body.account && body.account.id;\n  accountName = body.account && body.account.name;\n} else {\n  message = body;\n  inboxId = body.inbox && body.inbox.id;\n  inboxTitle = body.inbox && body.inbox.name;\n  convId = body.conversation && body.conversation.id;\n  channelType = body.conversation && body.conversation.channel;\n  accountId = body.account && body.account.id;\n  accountName = body.account && body.account.name;\n}\n\nconst rawMessageType = message.message_type;\nconst messageType =\n  rawMessageType === 0 || rawMessageType === 'incoming' ? 'incoming' :\n  rawMessageType === 1 || rawMessageType === 'outgoing' ? 'outgoing' :\n  String(rawMessageType);\n\nconst conversation = isAutomationEvent ? body : body.conversation;\n\nreturn [{\n  json: {\n    data: {\n      inbox_id: inboxId !== undefined ? String(inboxId) : 'undefined',\n      inbox_title: inboxTitle !== undefined ? String(inboxTitle) : 'undefined',\n      conv_id: convId !== undefined ? String(convId) : 'undefined',\n      channel_type: channelType !== undefined ? String(channelType) : 'undefined',\n      message_id: message.id !== undefined ? String(message.id) : 'undefined',\n      message_content: message.content !== undefined ? message.content : 'undefined',\n      message_type: messageType,\n      private: message.private !== undefined ? String(message.private) : 'undefined',\n      account_id: accountId !== undefined ? String(accountId) : 'undefined',\n      account_name: accountName !== undefined ? String(accountName) : 'undefined',\n      content_type: message.content_type !== undefined ? String(message.content_type) : 'undefined',\n      created_at: message.created_at !== undefined ? String(message.created_at) : 'undefined',\n      event: body.event,\n      conversation_labels: (conversation && conversation.labels) || [],\n      attachments: body.attachments || [],\n      meta: (conversation && conversation.meta) || null,\n    },\n  },\n}];\n"
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://irrihub-app/api/leads/chatwoot",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $env.CHATWOOT_LEAD_WEBHOOK_TOKEN }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"contact_id\": \"{{ $('Squize Webhook Data').item.json.data.meta?.sender?.id ?? $('Squize Webhook Data').item.json.data.conv_id }}\",\n  \"conversation_id\": \"{{ $('Squize Webhook Data').item.json.data.conv_id }}\",\n  \"full_name\": {{ JSON.stringify($json.crm_payload?.full_name ?? $('Squize Webhook Data').item.json.data.meta?.sender?.name ?? null) }},\n  \"phone\": {{ JSON.stringify($json.crm_payload?.phone ?? $('Squize Webhook Data').item.json.data.meta?.sender?.phone_number ?? null) }},\n  \"email\": {{ JSON.stringify($json.crm_payload?.email ?? $('Squize Webhook Data').item.json.data.meta?.sender?.email ?? null) }},\n  \"actor_type\": \"farmer\",\n  \"language\": {{ JSON.stringify($json.language ?? \"en\") }},\n  \"reason\": {{ JSON.stringify($json.category === \"lead_capture\" ? \"Visitor provided contact details in chat\" : \"Escalated to a human agent by the AI assistant\") }},\n  \"summary\": {{ JSON.stringify($json.crm_payload?.summary ?? null) }}\n}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          3008,
+          544
+        ],
+        "id": "f1a7c3e2-9b4d-4c61-8a2f-6d5e0b7c1a93",
+        "name": "Create CRM Lead",
+        "onError": "continueRegularOutput",
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 2000
+      }
+    ],
+    "connections": {
+      "Check If Incoming Message": {
+        "main": [
+          [
+            {
+              "node": "Get Conversation State",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get Conversation State": {
+        "main": [
+          [
+            {
+              "node": "Check If Already Assigned",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check If Already Assigned": {
+        "main": [
+          [],
+          [
+            {
+              "node": "Load Chatwoot Conversation History",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Load Chatwoot Conversation History": {
+        "main": [
+          [
+            {
+              "node": "Process Loaded History",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process Loaded History": {
+        "main": [
+          [
+            {
+              "node": "Call IrriHub RAG /chat",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Call IrriHub RAG /chat": {
+        "main": [
+          [
+            {
+              "node": "Check If Escalate",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check If Escalate": {
+        "main": [
+          [
+            {
+              "node": "Send AI Reply (Escalated)",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Create CRM Lead",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Send AI Reply",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send AI Reply (Escalated)": {
+        "main": [
+          [
+            {
+              "node": "Label Conversation for Escalation",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Label Conversation for Escalation": {
+        "main": [
+          [
+            {
+              "node": "Assign Conversation to Support Team",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Chatwoot Webhook": {
+        "main": [
+          [
+            {
+              "node": "Squize Webhook Data",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Squize Webhook Data": {
+        "main": [
+          [
+            {
+              "node": "Check If Incoming Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Create CRM Lead": {
+        "main": [
+          []
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "availableInMCP": true
+    },
+    "versionCounter": 13
+  }
+]

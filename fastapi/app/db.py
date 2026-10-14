@@ -7,6 +7,11 @@ load_dotenv()
 
 _pool: asyncpg.Pool | None = None
 
+# How long a conversation stays human-managed with no human reply before
+# the bot resumes answering. Prevents a conversation from being silenced
+# forever when an agent escalates it and then never follows up.
+HUMAN_MANAGED_IDLE_HOURS = 48
+
 
 def get_database_url() -> str:
     url = os.getenv("DATABASE_URL")
@@ -83,12 +88,23 @@ async def is_conversation_human_managed(conversation_id: str) -> bool:
     Once a conversation has been escalated, a human owns it — the bot
     must not keep auto-replying underneath them. Checked at the start
     of every /chat call.
+
+    The flag is only honored while `last_active` is recent — if a human
+    never actually followed up, it clears itself after
+    HUMAN_MANAGED_IDLE_HOURS so the conversation doesn't stay silenced
+    forever.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT is_human_managed FROM sessions WHERE conversation_id = $1",
+            """
+            SELECT is_human_managed
+            FROM sessions
+            WHERE conversation_id = $1
+              AND last_active > now() - ($2 * INTERVAL '1 hour')
+            """,
             conversation_id,
+            HUMAN_MANAGED_IDLE_HOURS,
         )
     return bool(row and row["is_human_managed"])
 
