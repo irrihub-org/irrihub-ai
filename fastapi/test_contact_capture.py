@@ -81,6 +81,44 @@ def test_a_phone_is_captured_even_without_being_asked():
     }
 
 
+def test_a_name_beside_a_number_is_captured():
+    """The real shape of the answer to "name and number?". Three live
+    transcripts, all of which lost the name and reached the CRM as
+    "Chatwoot Visitor" despite the visitor having typed it."""
+    for said, name, phone in [
+        ("John Doe , 0700123987 is the number", "John Doe", "+254700123987"),
+        ("John Doe 0700123987", "John Doe", "+254700123987"),
+        ("Chatika , number is 0700123654", "Chatika", "+254700123654"),
+        ("Omari Tst- 0701112345", "Omari Tst", "+254701112345"),
+    ]:
+        got = extract_contact_details(said, ASKED)
+        assert got.get("full_name") == name, said
+        assert got.get("phone") == phone, said
+
+
+def test_scaffolding_around_a_number_is_not_read_as_a_name():
+    """Otherwise "the number is 0700123987" produces a lead called
+    "The Number Is"."""
+    for said in [
+        "the number is 0700123987",
+        "my number is 0700123987",
+        "call me on 0700123987",
+        "0700123987",
+    ]:
+        got = extract_contact_details(said, ASKED)
+        assert got.get("phone") == "+254700123987", said
+        assert "full_name" not in got, said
+
+
+def test_a_name_beside_an_email_does_not_absorb_the_address():
+    """Cutting at "@" would keep the address's local part, giving
+    "Lydia Wanjiku Lydia"."""
+    got = extract_contact_details("lydia wanjiku, lydia@example.com", ASKED)
+
+    assert got["full_name"] == "Lydia Wanjiku"
+    assert got["email"] == "lydia@example.com"
+
+
 def test_self_introduction_is_captured_without_being_asked():
     """An explicit introduction is unambiguous, unlike a bare name."""
     for said, expected in [

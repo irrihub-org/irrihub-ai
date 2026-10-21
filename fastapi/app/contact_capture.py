@@ -71,6 +71,15 @@ _NOT_NAMES = {
 
 MAX_NAME_WORDS = 4
 
+# Words people put around a number when answering "name and number?".
+# "the number is 0700123987" has no name in it, and without this the
+# lead-in words become one — a lead called "The Number Is".
+_NAME_FILLER = {
+    "the", "my", "name", "is", "number", "no", "phone", "mobile", "tel",
+    "call", "me", "on", "and", "its", "it's", "am", "this", "here",
+    "nambari", "yangu", "jina", "ni", "simu",
+}
+
 
 def _normalise_phone(raw: str) -> str:
     """To E.164, the format the CRM stores and dedups on."""
@@ -135,13 +144,36 @@ def extract_contact_details(
             found["full_name"] = candidate
             return found
 
-    if found:
+    # A bare name has no signal of its own — "Lydia" and "maize" are
+    # both single words — so from here on a name is only read when the
+    # assistant asked for one in the preceding messages.
+    if not _bot_asked_for_contact(conversation_history):
         return found
 
-    # A bare name has no signal of its own — "Lydia" and "maize" are
-    # both single words — so it is only read when the assistant asked in
-    # the preceding messages.
-    if not _bot_asked_for_contact(conversation_history):
+    # We asked for a name AND a number and got both at once: "John Doe ,
+    # 0700123987 is the number". The phone was taken above; the name is
+    # whatever leads the message before the digits start.
+    #
+    # Without this the name was silently dropped — the visitor typed it,
+    # the bot read back only the number, and the lead reached the CRM as
+    # "Chatwoot Visitor".
+    if found:
+        if "full_name" not in found:
+            # Cut at whichever detail comes first. Splitting on "@"
+            # would keep the email's local part ("lydia@..." leaving
+            # "lydia"), so the cut is made at the start of the whole
+            # match, not inside it.
+            cut = len(text)
+            if email_match:
+                cut = min(cut, email_match.start())
+            digit = re.search(r"\d", text)
+            if digit:
+                cut = min(cut, digit.start())
+
+            candidate = _clean_name(text[:cut])
+            if candidate:
+                found["full_name"] = candidate
+
         return found
 
     # A question is not a name, however short.
@@ -157,7 +189,14 @@ def extract_contact_details(
 
 def _clean_name(raw: str) -> str | None:
     """Validate and title-case a name candidate, or None if it isn't one."""
-    words = raw.strip().rstrip(".!,").split()
+    # Punctuation people leave around a name when typing it beside a
+    # number: "John Doe ,", "Omari Tst-".
+    words = [w.strip(".,!-–—:;") for w in raw.strip().split()]
+    words = [w for w in words if w]
+
+    # Drop the scaffolding around a number ("the number is 0700…") so
+    # what remains is the name, or nothing.
+    words = [w for w in words if w.lower() not in _NAME_FILLER]
 
     if not 1 <= len(words) <= MAX_NAME_WORDS:
         return None
