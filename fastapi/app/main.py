@@ -17,6 +17,7 @@ from app.contact_capture import (
     extract_contact_details,
 )
 from app.lead_summary import summarise_request
+from app.crm_client import send_lead
 from app.handoff import build_handoff_message, LOW_CONFIDENCE_LEAD_IN
 
 DetectorFactory.seed = 0
@@ -233,6 +234,13 @@ async def chat(req: ChatRequest):
     if wants_human_by_keyword(query) or await wants_human_by_intent(query):
         await mark_conversation_human_managed(req.conversation_id, language)
         payload = await _lead_payload(req, query)
+        send_lead(
+            req.conversation_id,
+            payload,
+            channel=req.channel,
+            reason="Asked to speak with a human",
+            language=language,
+        )
         return AIResponse(
             text=build_handoff_message(
                 language,
@@ -257,6 +265,13 @@ async def chat(req: ChatRequest):
             f"captured={sorted(contact_details)}"
         )
         payload = await _lead_payload(req, query, contact_details)
+        send_lead(
+            req.conversation_id,
+            payload,
+            channel=req.channel,
+            reason="Visitor provided contact details in chat",
+            language=language,
+        )
         return AIResponse(
             text=contact_acknowledgement(
                 contact_details,
@@ -324,6 +339,13 @@ async def chat(req: ChatRequest):
             failure_reason=failure_reason,
         )
         payload = await _lead_payload(req, query)
+        send_lead(
+            req.conversation_id,
+            payload,
+            channel=req.channel,
+            reason="The assistant could not answer and handed over",
+            language=language,
+        )
         return AIResponse(
             text=build_handoff_message(
                 language,
