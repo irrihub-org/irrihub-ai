@@ -18,6 +18,7 @@ from app.contact_capture import (
 )
 from app.lead_summary import summarise_request
 from app.crm_client import send_lead
+from app.escalation_intent import is_too_short_to_judge
 from app.handoff import build_handoff_message, LOW_CONFIDENCE_LEAD_IN
 
 DetectorFactory.seed = 0
@@ -129,6 +130,11 @@ async def wants_human_by_intent(text: str) -> bool:
     catch gets a cheap LLM classification pass before falling through
     to the full RAG pipeline.
     """
+    # A one-word reply carries no request, and the classifier sees it
+    # without the question it answers. See escalation_intent.
+    if is_too_short_to_judge(text):
+        return False
+
     try:
         verdict = await generate_response(
             text,
@@ -232,8 +238,48 @@ async def chat(req: ChatRequest):
 
     # --- Tier 1: did the user explicitly ask for a human? ---
     if wants_human_by_keyword(query) or await wants_human_by_intent(query):
-        await mark_conversation_human_managed(req.conversation_id, language)
         payload = await _lead_payload(req, query)
+        has_phone = bool(payload.get("phone"))
+
+        # Only hand over once we can actually reach them. Marking the
+        # conversation human-managed here — and, downstream, assigning
+        # it in Chatwoot — stops the bot being called again, so a
+        # number given in the next message is never seen. Conversation
+        # 15 is the worked example: the bot asked for a name and
+        # number, the visitor answered "Chatika, number is
+        # 0700123654", and nothing received it. The lead reached the
+        # CRM as "Chatwoot Visitor" with no phone, and the farmer sat
+        # in silence.
+        #
+        # So the ask comes first and the handoff waits. The lead is
+        # still created immediately, because a visitor who abandons
+        # the chat is better recorded with no phone than not at all —
+        # it is updated when the number arrives.
+        if not has_phone:
+            send_lead(
+                req.conversation_id,
+                payload,
+                channel=req.channel,
+                reason="Asked to speak with a human",
+                language=language,
+            )
+            return AIResponse(
+                text=build_handoff_message(
+                    language,
+                    has_name=bool(payload.get("full_name")),
+                    has_phone=False,
+                ),
+                intent="escalation_request",
+                category="awaiting_contact_details",
+                # Not "escalate": that is what labels and assigns the
+                # conversation in n8n, which is exactly what must not
+                # happen until we have a number.
+                route="respond",
+                language=language,
+                crm_payload=payload,
+            )
+
+        await mark_conversation_human_managed(req.conversation_id, language)
         send_lead(
             req.conversation_id,
             payload,
@@ -245,7 +291,7 @@ async def chat(req: ChatRequest):
             text=build_handoff_message(
                 language,
                 has_name=bool(payload.get("full_name")),
-                has_phone=bool(payload.get("phone")),
+                has_phone=True,
             ),
             intent="escalation_request",
             category="human_handoff_requested",
@@ -265,6 +311,8 @@ async def chat(req: ChatRequest):
             f"captured={sorted(contact_details)}"
         )
         payload = await _lead_payload(req, query, contact_details)
+        has_phone = bool(payload.get("phone"))
+
         send_lead(
             req.conversation_id,
             payload,
@@ -272,21 +320,30 @@ async def chat(req: ChatRequest):
             reason="Visitor provided contact details in chat",
             language=language,
         )
+
+        # The number completes the handoff the escalation started, so
+        # this is where the conversation passes to a human. Until then
+        # the bot keeps the conversation — otherwise the next message,
+        # the one carrying the number, never reaches it.
+        if has_phone:
+            await mark_conversation_human_managed(req.conversation_id, language)
+
         return AIResponse(
             text=contact_acknowledgement(
                 contact_details,
                 language,
                 # A number Chatwoot already holds counts: do not ask a
                 # visitor for a phone we can already see.
-                has_phone=bool(payload.get("phone")),
+                has_phone=has_phone,
             ),
             intent="contact_details_provided",
             category="lead_capture",
             confidence=1.0,
-            # route stays "escalate" so the n8n branch that labels the
-            # conversation and assigns a human still fires. These details
-            # are only worth capturing if somebody follows up.
-            route="escalate",
+            # Only escalate once we can reach them. Without a number
+            # there is still a question outstanding, and escalating
+            # would assign the conversation and silence the bot before
+            # the answer arrives.
+            route="escalate" if has_phone else "respond",
             language=language,
             crm_payload=payload,
         )
@@ -339,6 +396,7 @@ async def chat(req: ChatRequest):
             failure_reason=failure_reason,
         )
         payload = await _lead_payload(req, query)
+        has_phone = bool(payload.get("phone"))
         send_lead(
             req.conversation_id,
             payload,
@@ -350,7 +408,7 @@ async def chat(req: ChatRequest):
             text=build_handoff_message(
                 language,
                 has_name=bool(payload.get("full_name")),
-                has_phone=bool(payload.get("phone")),
+                has_phone=has_phone,
                 lead_in=LOW_CONFIDENCE_LEAD_IN.get(
                     language, LOW_CONFIDENCE_LEAD_IN["en"]
                 ),
@@ -358,7 +416,9 @@ async def chat(req: ChatRequest):
             intent=intent,
             category=category,
             confidence=confidence,
-            route="escalate",
+            # Same rule as the explicit request above: do not assign
+            # the conversation while still asking for a number.
+            route="escalate" if has_phone else "respond",
             language=language,
             sources=_build_source_labels(chunks),
             crm_payload=payload,
