@@ -170,7 +170,53 @@ def test_acknowledgement_promises_a_callback_and_closes_the_chat():
 
 
 def test_acknowledgement_greets_by_name():
-    assert "Lydia" in acknowledgement({"full_name": "Lydia"})
+    assert "Lydia" in acknowledgement({"full_name": "Lydia"}, has_phone=True)
+
+
+def test_an_email_alone_is_not_enough_to_close_the_conversation():
+    """Conversation 50's first message. The sales team phones people —
+    an email reaches nobody in a field — so the bot must ask for a
+    number rather than thank them and end the chat."""
+    text = acknowledgement({"email": "ndutalm@gmail.com"})
+
+    assert "what number" in text.lower()
+    assert "ndutalm@gmail.com" in text
+    # Must not promise a call it has no way to make, or close the chat
+    # while still asking for something.
+    assert "call you back today" not in text
+    assert "close this chat" not in text
+
+
+def test_a_name_alone_is_not_enough_either():
+    text = acknowledgement({"full_name": "Lydia"})
+
+    assert "Lydia" in text
+    assert "what number" in text.lower()
+    assert "close this chat" not in text
+
+
+def test_a_phone_closes_the_conversation():
+    text = acknowledgement({"phone": "+254721716571"})
+
+    assert "+254721716571" in text
+    assert "call you back today" in text
+    assert "close this chat" in text
+    assert "what number" not in text.lower()
+
+
+def test_a_phone_already_known_to_chatwoot_is_not_asked_for_again():
+    """A pre-chat form or earlier conversation may already have it."""
+    text = acknowledgement({"email": "a@b.com"}, has_phone=True)
+
+    assert "what number" not in text.lower()
+    assert "close this chat" in text
+
+
+def test_swahili_also_asks_for_the_number_when_missing():
+    text = acknowledgement({"email": "a@b.com"}, "sw")
+
+    assert "nambari" in text.lower()
+    assert "Nitafunga" not in text
 
 
 def test_acknowledgement_has_a_swahili_form():

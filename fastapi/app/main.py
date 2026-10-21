@@ -256,8 +256,15 @@ async def chat(req: ChatRequest):
             f"[contact-capture] conversation={req.conversation_id} "
             f"captured={sorted(contact_details)}"
         )
+        payload = await _lead_payload(req, query, contact_details)
         return AIResponse(
-            text=contact_acknowledgement(contact_details, language),
+            text=contact_acknowledgement(
+                contact_details,
+                language,
+                # A number Chatwoot already holds counts: do not ask a
+                # visitor for a phone we can already see.
+                has_phone=bool(payload.get("phone")),
+            ),
             intent="contact_details_provided",
             category="lead_capture",
             confidence=1.0,
@@ -266,7 +273,7 @@ async def chat(req: ChatRequest):
             # are only worth capturing if somebody follows up.
             route="escalate",
             language=language,
-            crm_payload=await _lead_payload(req, query, contact_details),
+            crm_payload=payload,
         )
 
     if app.state.embedding_model is None:
