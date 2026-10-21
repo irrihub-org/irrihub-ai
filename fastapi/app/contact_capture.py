@@ -176,22 +176,31 @@ def _clean_name(raw: str) -> str | None:
     return " ".join(w.capitalize() for w in words)
 
 
-def acknowledgement(details: dict, language: str = "en") -> str:
+def acknowledgement(
+    details: dict,
+    language: str = "en",
+    has_phone: bool = False,
+) -> str:
     """What to say back once details are captured.
 
     Reads back what was heard, so a mistyped number is visible to the
-    visitor while they can still correct it, and commits to a callback
-    rather than implying someone is about to appear in the chat — the
-    conversation auto-resolves ten minutes after the handoff, so a
-    promise of an imminent reply is one the channel cannot keep.
+    visitor while they can still correct it.
+
+    The phone number is what makes a lead workable — the sales team calls
+    people back, and an email reaches nobody in a field. So this keeps
+    asking until a number is captured, and only then closes the
+    conversation. Without that, a visitor who answers "how can we reach
+    you?" with an email address gets thanked, told we will call, and the
+    chat ends having never asked for a number. That is conversation 50
+    exactly: she gave her email first.
+
+    has_phone covers a number we already hold from Chatwoot (a pre-chat
+    form, or an earlier conversation) rather than from this message.
     """
     name = details.get("full_name")
     captured = [details[k] for k in ("phone", "email") if k in details]
+    phone_known = has_phone or "phone" in details
 
-    # This is where the conversation actually ends — the handoff asked a
-    # question, the visitor answered it, and nothing follows. So the
-    # closing line belongs here rather than on the handoff, which cannot
-    # say "I'll close this chat" in the same breath as asking something.
     if language == "sw":
         greeting = f"Asante {name}!" if name else "Asante!"
         body = (
@@ -199,6 +208,10 @@ def acknowledgement(details: dict, language: str = "en") -> str:
             if captured
             else "Nimehifadhi maelezo yako"
         )
+
+        if not phone_known:
+            return f"{greeting} {body}. Ni nambari gani ya simu wakupigie?"
+
         return (
             f"{greeting} {body} — timu yetu itakupigia leo. Nitafunga "
             "mazungumzo haya sasa, lakini ombi lako liko kwao."
@@ -210,6 +223,12 @@ def acknowledgement(details: dict, language: str = "en") -> str:
         if captured
         else "I've noted your details"
     )
+
+    # Still no number: ask, and leave the conversation open for it. The
+    # closing line would contradict the question, same as in handoff.
+    if not phone_known:
+        return f"{greeting} {body}. What number should the team call you on?"
+
     return (
         f"{greeting} {body} — our team will call you back today. I'll close "
         "this chat now, but your request is with them."
