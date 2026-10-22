@@ -19,6 +19,7 @@ from app.contact_capture import (
 from app.lead_summary import summarise_request
 from app.crm_client import send_lead
 from app.escalation_intent import is_too_short_to_judge
+from app.transcript import trim_transcript
 from app.handoff import build_handoff_message, LOW_CONFIDENCE_LEAD_IN
 
 DetectorFactory.seed = 0
@@ -217,6 +218,15 @@ async def _lead_payload(
     summary = await summarise_request(req.conversation_history or query)
     if summary:
         payload["summary"] = summary
+
+    # The conversation itself, so a rep can read what was said without
+    # opening Chatwoot and hunting for a thread that has usually
+    # auto-resolved by the time they look. The summary answers "what do
+    # they want?"; this answers "what exactly did they say?", which is
+    # what a rep wants before picking up the phone.
+    transcript = (req.conversation_history or "").strip()
+    if transcript:
+        payload["transcript"] = trim_transcript(transcript)
 
     return payload
 

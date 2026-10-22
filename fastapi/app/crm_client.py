@@ -87,6 +87,10 @@ def build_lead(
         "channel": normalise_channel(channel),
         "reason": reason or "Escalated to a human agent by the AI assistant",
         "summary": crm_payload.get("summary"),
+        # What was actually said. The chat auto-resolves ten minutes
+        # after the handoff, so without this a rep has to go digging
+        # through resolved Chatwoot threads for context.
+        "transcript": crm_payload.get("transcript"),
     }
 
 
