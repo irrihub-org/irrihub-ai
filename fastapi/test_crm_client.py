@@ -37,7 +37,17 @@ def test_the_payload_matches_what_the_crm_validates():
         "channel": "web",
         "reason": "Escalated to a human agent by the AI assistant",
         "summary": "Wants a quote for a drip kit.",
+        "transcript": None,
     }
+
+
+def test_the_transcript_travels_with_the_lead():
+    """The chat auto-resolves ten minutes after the handoff, so this is
+    often the only record of what was said."""
+    chat = "[USER] : hi\n[ASSISTANT] : Hello!\n[USER] : I need a quote"
+    lead = build_lead("54", {"transcript": chat})
+
+    assert lead["transcript"] == chat
 
 
 def test_an_anonymous_escalation_still_produces_a_valid_lead():
